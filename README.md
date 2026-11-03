@@ -87,3 +87,7 @@ The role automatically generates an ED25519 SSH host key at `{{ nebula_config_di
 ```
 ansible-playbook -i inventory nebula.yml
 ```
+
+# Testing
+
+See [testing/README.md](testing/README.md) for the LXD regression suite.

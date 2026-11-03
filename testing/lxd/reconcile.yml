@@ -1,0 +1,16 @@
+---
+- name: Reconcile lighthouse configuration
+  hosts: nebula_lighthouse
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
+        tasks_from: lighthouse
+
+- name: Reconcile node certificates and configuration
+  hosts: nodes
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
+        tasks_from: node

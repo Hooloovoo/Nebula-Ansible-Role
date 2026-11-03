@@ -1,0 +1,21 @@
+---
+- name: Provision separate CA before consumers
+  hosts: ca_hosts
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
+
+- name: Deploy lighthouse
+  hosts: nebula_lighthouse
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
+
+- name: Deploy node
+  hosts: nodes
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"

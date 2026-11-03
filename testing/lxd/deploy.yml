@@ -1,0 +1,14 @@
+---
+- name: Deploy lighthouse before its nodes
+  hosts: nebula_lighthouse
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
+
+- name: Deploy nodes
+  hosts: nodes
+  become: true
+  tasks:
+    - ansible.builtin.include_role:
+        name: "{{ tested_role }}"
