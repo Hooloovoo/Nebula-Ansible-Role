@@ -8,7 +8,7 @@ Declare every host that must continue communicating, including lighthouses and t
 
 Set the same `nebula_ca_host`, `nebula_config_dir`, `nebula_network_name`, `nebula_ca_cert_duration`, and `nebula_rotation_id` for all participants. Use a new rotation ID containing only letters, numbers, underscores or hyphens for each new CA. If `nebula_ca_host` is unset, the first lighthouse is used. All participants must have a running role-managed Nebula service, accessible systemd journal, and a working management connection.
 
-For example, when the signer is also the local Ansible controller:
+For example, reuse existing inventory groups when the signer is also a Nebula participant and the local Ansible controller:
 
 ```yaml
 all:
@@ -21,13 +21,18 @@ all:
     nebula_lighthouse:
       hosts:
         lighthouse:
-    nebula_rotation:
+    nebula_nodes:
       hosts:
         controller:
           ansible_connection: local
-        lighthouse:
         node:
+    nebula_rotation:
+      children:
+        nebula_lighthouse: {}
+        nebula_nodes: {}
 ```
+
+Add the `nebula_rotation` group to the existing inventory rather than defining the hosts again. Include every group containing a participant; the controller belongs in `nebula_nodes` here because it runs Nebula. A CA-only signer must still be in inventory but need not be in `nebula_rotation`. Check the resulting membership with `ansible-inventory -i inventory --graph nebula_rotation`.
 
 Configure the ordinary role variables for each host too, including certificate groups when using the certificate-groups feature. The example names are inventory aliases; the certificate's existing name is preserved.
 
