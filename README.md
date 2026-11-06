@@ -80,6 +80,10 @@ When moving an existing CA, securely copy both `ca.crt` and `ca.key` to `nebula_
 before running the role, so existing certificates remain trusted. After verifying the move, remove old CA private
 key copies from hosts that should no longer hold them.
 
+# CA Rotation
+
+See [docs/ca-rotation.md](docs/ca-rotation.md) for the staged CA rotation workflow.
+
 # SSH Debug Console
 
 This role supports Nebula's built-in SSH debug console feature. To enable it, set:

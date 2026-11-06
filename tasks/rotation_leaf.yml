@@ -1,0 +1,126 @@
+---
+- name: Read current participant certificate
+  slurp:
+    src: "{{ nebula_config_dir }}/{{ rotation_cert_name }}.crt"
+  become: true
+  register: rotation_leaf_pem
+
+- name: Create public signing request directory
+  file:
+    path: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}"
+    state: directory
+    mode: '0700'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Stage public source certificate on signer
+  copy:
+    content: "{{ rotation_leaf_pem.content | b64decode }}"
+    dest: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/source.crt"
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Inspect source certificate
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/source.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_leaf_output
+
+- name: Normalize source certificate
+  set_fact:
+    rotation_leaf_before: "{{ rotation_leaf_output.stdout | from_json | rotation_certificate }}"
+
+- name: Stage the existing public key
+  copy:
+    content: "{{ rotation_leaf_before | rotation_public_key }}"
+    dest: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/source.pub"
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Inspect signer capabilities
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", sign, -help]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  register: rotation_sign_help
+
+- name: Sign the existing public key
+  command:
+    argv: >-
+      {{ rotation_leaf_before | rotation_leaf_argv(
+         nebula_config_dir ~ '/nebula-cert',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/ca.crt',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/ca.key',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/' ~ (inventory_hostname | hash('sha256')) ~ '/source.pub',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/' ~ (inventory_hostname | hash('sha256')) ~ '/' ~ rotation_leaf_before.fingerprint ~ '.crt',
+         '-version' in (rotation_sign_help.stdout ~ rotation_sign_help.stderr),
+         '-networks' in (rotation_sign_help.stdout ~ rotation_sign_help.stderr)) }}
+    creates: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/{{ rotation_leaf_before.fingerprint }}.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Verify the staged replacement certificate
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt", -crt, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/{{ rotation_leaf_before.fingerprint }}.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Inspect staged replacement certificate
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/{{ rotation_leaf_before.fingerprint }}.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_leaf_new_output
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Normalize staged replacement certificate
+  set_fact:
+    rotation_leaf_new: "{{ rotation_leaf_new_output.stdout | from_json | rotation_certificate }}"
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Verify replacement identity
+  assert:
+    that:
+      - rotation_leaf_new.details.issuer == rotation_new_fingerprint
+      - rotation_leaf_new.details.name == rotation_leaf_before.details.name
+      - rotation_leaf_new.details.networks == rotation_leaf_before.details.networks
+      - rotation_leaf_new.details.unsafeNetworks | sort == rotation_leaf_before.details.unsafeNetworks | sort
+      - rotation_leaf_new.details.groups | sort == rotation_leaf_before.details.groups | sort
+      - rotation_leaf_new.version | default(1) == rotation_leaf_before.version | default(1)
+      - rotation_leaf_new | rotation_public_key == rotation_leaf_before | rotation_public_key
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Read staged replacement certificate
+  slurp:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ inventory_hostname | hash('sha256') }}/{{ rotation_leaf_before.fingerprint }}.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_leaf_new_pem
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Activate replacement certificate
+  include_tasks: rotation_install.yml
+  vars:
+    rotation_file_path: "{{ nebula_config_dir }}/{{ rotation_cert_name }}.crt"
+    rotation_file_content: "{{ rotation_leaf_new_pem.content | b64decode }}"
+    rotation_expected_fingerprint: "{{ rotation_leaf_new.fingerprint }}"
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint
+
+- name: Update the signer's canonical certificate
+  copy:
+    content: "{{ rotation_leaf_new_pem.content | b64decode }}"
+    dest: "{{ nebula_config_dir }}/{{ rotation_cert_name }}.crt"
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  when: rotation_leaf_before.details.issuer != rotation_new_fingerprint

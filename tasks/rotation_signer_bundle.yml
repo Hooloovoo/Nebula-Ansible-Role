@@ -1,0 +1,26 @@
+---
+- name: Read the signer trust bundle
+  slurp:
+    src: "{{ nebula_config_dir }}/ca.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_signer_final_bundle
+
+- name: Read old and replacement CA certificates
+  slurp:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ item }}"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  loop: [old.crt, ca.crt]
+  register: rotation_signer_final_cas
+
+- name: Retire only the original CA from signer trust
+  copy:
+    content: >-
+      {{ (rotation_signer_final_bundle.content | b64decode) | rotation_trust_bundle(
+         rotation_signer_final_cas.results[1].content | b64decode,
+         rotation_signer_final_cas.results[0].content | b64decode) }}
+    dest: "{{ nebula_config_dir }}/ca.crt"
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true

@@ -1,0 +1,34 @@
+---
+- name: Read the replacement CA certificate
+  slurp:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_new_pem
+
+- name: Read the original CA certificate
+  slurp:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_old_pem
+
+- name: Read current participant trust
+  slurp:
+    src: "{{ nebula_config_dir }}/ca.crt"
+  become: true
+  register: rotation_trust_before
+
+- name: Construct participant trust bundle
+  set_fact:
+    rotation_trust_content: >-
+      {{ (rotation_trust_before.content | b64decode) | rotation_trust_bundle(
+         rotation_new_pem.content | b64decode,
+         (rotation_old_pem.content | b64decode) if (rotation_retire_old | default(false) | bool) else none) }}
+
+- name: Activate participant trust
+  include_tasks: rotation_install.yml
+  vars:
+    rotation_file_path: "{{ nebula_config_dir }}/ca.crt"
+    rotation_file_content: "{{ rotation_trust_content }}"
+    rotation_expected_fingerprint: ''

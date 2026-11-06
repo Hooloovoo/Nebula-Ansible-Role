@@ -1,0 +1,44 @@
+---
+- name: Read participant certificate for finalization
+  slurp:
+    src: "{{ nebula_config_dir }}/{{ rotation_cert_name }}.crt"
+  become: true
+  register: rotation_verify_pem
+
+- name: Create verification directory
+  file:
+    path: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/verify"
+    state: directory
+    mode: '0700'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Stage public participant certificate for verification
+  copy:
+    content: "{{ rotation_verify_pem.content | b64decode }}"
+    dest: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/verify/{{ inventory_hostname | hash('sha256') }}.crt"
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Verify participant certificate under replacement CA
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt", -crt, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/verify/{{ inventory_hostname | hash('sha256') }}.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+
+- name: Inspect participant certificate
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/verify/{{ inventory_hostname | hash('sha256') }}.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_verify_output
+
+- name: Require the replacement certificate to be active
+  assert:
+    that:
+      - (rotation_verify_output.stdout | from_json | rotation_certificate).details.issuer == rotation_new_fingerprint
+      - (rotation_verify_output.stdout | from_json | rotation_certificate).fingerprint in rotation_reload_log.stdout
+    fail_msg: "The participant has not loaded a certificate signed by the replacement CA."

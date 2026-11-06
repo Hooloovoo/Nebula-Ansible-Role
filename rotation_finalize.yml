@@ -1,0 +1,85 @@
+---
+- name: Verify every participant uses the replacement CA
+  hosts: nebula_rotation
+  strategy: linear
+  gather_facts: true
+  any_errors_fatal: true
+  become: true
+  vars:
+    rotation_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+    rotation_cert_name: "{{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}"
+  pre_tasks:
+    - name: Select the configured CA host or the default lighthouse
+      set_fact:
+        nebula_ca_host: "{{ nebula_ca_host | default(groups['nebula_lighthouse'][0]) }}"
+    - name: Require the complete Linux participant group
+      assert:
+        that:
+          - groups.get('nebula_rotation', []) | length > 0
+          - ansible_play_hosts_all | sort == groups['nebula_rotation'] | sort
+          - ansible_facts['system'] == 'Linux'
+          - not ansible_check_mode
+          - nebula_ca_host is defined
+          - nebula_ca_host in hostvars
+          - nebula_ca_host == hostvars[ansible_play_hosts_all[0]].nebula_ca_host
+          - nebula_rotation_id is match('^[A-Za-z0-9_-]+$')
+  tasks:
+    - name: Require and reload prepared trust
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_require_trust
+    - name: Verify the active participant certificate
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_verify_leaf
+    - name: Recheck the replacement signing key before promotion
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_key_check
+      vars:
+        rotation_check_ca: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"
+        rotation_check_key: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.key"
+      run_once: true
+    - name: Promote replacement signing key after the all-host barrier
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_promote_key
+      run_once: true
+
+- name: Retire the original CA sequentially
+  hosts: nebula_rotation
+  strategy: linear
+  serial: 1
+  gather_facts: true
+  any_errors_fatal: true
+  become: true
+  vars:
+    rotation_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+  tasks:
+    - name: Remove old CA from participant trust
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_trust
+      vars:
+        rotation_retire_old: true
+    - name: Reset management connection
+      meta: reset_connection
+      when: ansible_connection | default('ssh') != 'local'
+    - name: Verify management connection before the next participant
+      wait_for_connection:
+        timeout: 60
+        connect_timeout: 5
+      when: ansible_connection | default('ssh') != 'local'
+
+- name: Update the signer's public trust bundle
+  hosts: nebula_rotation
+  strategy: linear
+  gather_facts: false
+  any_errors_fatal: true
+  become: true
+  tasks:
+    - name: Retire old CA from signer trust
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_signer_bundle
+      run_once: true

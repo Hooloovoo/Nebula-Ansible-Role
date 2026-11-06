@@ -1,0 +1,34 @@
+---
+- name: Read the replacement CA
+  slurp:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_required_ca_pem
+
+- name: Inspect the replacement CA
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_required_ca_output
+
+- name: Record replacement CA fingerprint
+  set_fact:
+    rotation_new_fingerprint: "{{ (rotation_required_ca_output.stdout | from_json | rotation_certificate).fingerprint }}"
+
+- name: Read participant trust bundle
+  slurp:
+    src: "{{ nebula_config_dir }}/ca.crt"
+  become: true
+  register: rotation_required_trust
+
+- name: Require overlapping trust before proceeding
+  assert:
+    that:
+      - (rotation_required_trust.content | b64decode) | rotation_contains_ca(rotation_required_ca_pem.content | b64decode)
+    fail_msg: "This participant does not trust the replacement CA; run prepare on all participants."
+
+- name: Reload and check prepared trust
+  include_tasks: rotation_trust.yml

@@ -1,0 +1,118 @@
+---
+- name: Create rotation directory on CA host
+  file:
+    path: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}"
+    state: directory
+    mode: '0700'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Read current signing CA bundle
+  slurp:
+    src: "{{ nebula_config_dir }}/ca.crt"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  register: rotation_signer_bundle
+
+- name: Preserve the original signing CA certificate
+  copy:
+    dest: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.crt"
+    content: "{{ (rotation_signer_bundle.content | b64decode | rotation_pem_blocks)[0] }}"
+    force: false
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+
+- name: Read original signing CA details
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_old_output
+
+- name: Normalize original signing CA
+  set_fact:
+    rotation_old_ca: "{{ rotation_old_output.stdout | from_json | rotation_certificate }}"
+
+- name: Inspect replacement CA files
+  stat:
+    path: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/{{ item }}"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  loop: [ca.crt, ca.key]
+  register: rotation_ca_files
+
+- name: Refuse an incomplete CA pair
+  assert:
+    that: rotation_ca_files.results[0].stat.exists == rotation_ca_files.results[1].stat.exists
+    fail_msg: "The rotation directory contains only one of ca.crt and ca.key."
+
+- name: Inspect CA command capabilities
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", ca, -help]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  register: rotation_ca_help
+
+- name: Generate replacement CA once
+  command:
+    argv: >-
+      {{ rotation_old_ca | rotation_ca_argv(
+         nebula_config_dir ~ '/nebula-cert',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/ca.crt',
+         nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/ca.key',
+         nebula_network_name ~ ' ' ~ nebula_rotation_id, nebula_ca_cert_duration,
+         '-version' in (rotation_ca_help.stdout ~ rotation_ca_help.stderr)) }}
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  no_log: true
+  when: not rotation_ca_files.results[0].stat.exists
+
+- name: Inspect replacement CA
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_new_output
+
+- name: Normalize replacement CA
+  set_fact:
+    rotation_new_ca: "{{ rotation_new_output.stdout | from_json | rotation_certificate }}"
+
+- name: Verify replacement CA restrictions
+  assert:
+    that:
+      - rotation_new_ca.details.isCa | bool
+      - rotation_new_ca.fingerprint != rotation_old_ca.fingerprint
+      - rotation_new_ca.version | default(1) == rotation_old_ca.version | default(1)
+      - rotation_new_ca.get('curve', rotation_new_ca.details.get('curve')) == rotation_old_ca.get('curve', rotation_old_ca.details.get('curve'))
+      - rotation_new_ca.details.networks | sort == rotation_old_ca.details.networks | sort
+      - rotation_new_ca.details.unsafeNetworks | sort == rotation_old_ca.details.unsafeNetworks | sort
+      - rotation_new_ca.details.groups | sort == rotation_old_ca.details.groups | sort
+    fail_msg: "The replacement CA does not preserve the original CA's restrictions."
+
+- name: Check for an archived original signing key
+  stat:
+    path: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.key"
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  no_log: true
+  register: rotation_ca_old_key_stat
+
+- name: Verify the selected original signing key
+  include_tasks: rotation_key_check.yml
+  vars:
+    rotation_check_ca: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.crt"
+    rotation_check_key: >-
+      {{ (nebula_config_dir ~ '/ca-rotations/' ~ nebula_rotation_id ~ '/old.key')
+         if rotation_ca_old_key_stat.stat.exists else (nebula_config_dir ~ '/ca.key') }}
+
+- name: Verify the replacement signing key
+  include_tasks: rotation_key_check.yml
+  vars:
+    rotation_check_ca: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.crt"
+    rotation_check_key: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.key"

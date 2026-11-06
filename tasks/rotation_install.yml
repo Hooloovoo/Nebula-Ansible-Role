@@ -1,0 +1,119 @@
+---
+# Install one public PKI file and reload the role-managed service. A handled
+# failure restores the file present at the start of this task.
+- name: Read the existing PKI file
+  slurp:
+    src: "{{ rotation_file_path }}"
+  become: true
+  register: rotation_file_before
+
+- name: Inspect the existing PKI file
+  stat:
+    path: "{{ rotation_file_path }}"
+  become: true
+  register: rotation_file_stat
+
+- name: Require a regular PKI file
+  assert:
+    that:
+      - rotation_file_stat.stat.isreg | default(false)
+      - not (rotation_file_stat.stat.islnk | default(false))
+
+- name: Read Nebula process ID
+  command:
+    argv: [systemctl, show, "{{ rotation_service }}", -p, MainPID, --value]
+  become: true
+  changed_when: false
+  register: rotation_pid_before
+
+- name: Record journal position
+  command:
+    argv: [journalctl, -u, "{{ rotation_service }}", -n, '0', --show-cursor, --no-pager]
+  become: true
+  changed_when: false
+  register: rotation_cursor
+
+- name: Install and reload PKI
+  block:
+    - name: Install PKI file atomically
+      copy:
+        content: "{{ rotation_file_content }}"
+        dest: "{{ rotation_file_path }}"
+        mode: "{{ rotation_file_stat.stat.mode }}"
+      become: true
+      register: rotation_file_install
+
+    - name: Validate Nebula configuration
+      command:
+        argv: ["{{ nebula_config_dir }}/nebula", -test, -config, "{{ nebula_config_dir }}/config.yml"]
+      become: true
+      changed_when: false
+      no_log: true
+
+    - name: Reload Nebula
+      systemd:
+        name: "{{ rotation_service }}"
+        state: reloaded
+      become: true
+      changed_when: rotation_file_install is changed
+
+    - name: Wait for the PKI reload log
+      command:
+        argv: [journalctl, -u, "{{ rotation_service }}", "--after-cursor={{ rotation_cursor.stdout | regex_search('-- cursor: (.+)', '\\1') | first }}", --no-pager, -o, cat]
+      become: true
+      changed_when: false
+      register: rotation_reload_log
+      until: "'refreshed from disk' in rotation_reload_log.stdout"
+      retries: 10
+      delay: 1
+
+    - name: Allow the trust-pool reload to finish
+      command:
+        argv: [sleep, '1']
+      changed_when: false
+
+    - name: Read complete reload log
+      command:
+        argv: [journalctl, -u, "{{ rotation_service }}", "--after-cursor={{ rotation_cursor.stdout | regex_search('-- cursor: (.+)', '\\1') | first }}", --no-pager, -o, cat]
+      become: true
+      changed_when: false
+      register: rotation_reload_log
+
+    - name: Check runtime activation
+      assert:
+        that:
+          - "'Failed to load ca from config' not in rotation_reload_log.stdout"
+          - "'Could not load client cert' not in rotation_reload_log.stdout"
+          - rotation_expected_fingerprint | default('') == '' or rotation_expected_fingerprint in rotation_reload_log.stdout
+
+    - name: Read Nebula process ID after reload
+      command:
+        argv: [systemctl, show, "{{ rotation_service }}", -p, MainPID, --value]
+      become: true
+      changed_when: false
+      register: rotation_pid_after
+
+    - name: Require Nebula to remain running without restart
+      assert:
+        that:
+          - rotation_pid_before.stdout | trim | int > 0
+          - rotation_pid_after.stdout | trim == rotation_pid_before.stdout | trim
+  rescue:
+    - name: Restore the pre-run PKI file
+      copy:
+        content: "{{ rotation_file_before.content | b64decode }}"
+        dest: "{{ rotation_file_path }}"
+        mode: "{{ rotation_file_stat.stat.mode }}"
+      become: true
+      when: rotation_file_install is changed
+
+    - name: Reload restored PKI
+      systemd:
+        name: "{{ rotation_service }}"
+        state: reloaded
+      become: true
+      when: rotation_file_install is changed
+
+    - name: Stop after failed PKI activation
+      fail:
+        msg: "PKI activation failed; the pre-run file was restored. Check Nebula and connectivity."

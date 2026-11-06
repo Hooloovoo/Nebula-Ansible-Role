@@ -1,0 +1,36 @@
+---
+- name: Generate a replacement CA and prepare overlapping trust
+  hosts: nebula_rotation
+  strategy: linear
+  gather_facts: true
+  any_errors_fatal: true
+  become: true
+  vars:
+    rotation_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+  pre_tasks:
+    - name: Select the configured CA host or the default lighthouse
+      set_fact:
+        nebula_ca_host: "{{ nebula_ca_host | default(groups['nebula_lighthouse'][0]) }}"
+    - name: Require all Linux participants and an explicit signer and rotation ID
+      assert:
+        that:
+          - groups.get('nebula_rotation', []) | length > 0
+          - ansible_play_hosts_all | sort == groups['nebula_rotation'] | sort
+          - ansible_facts['system'] == 'Linux'
+          - not ansible_check_mode
+          - nebula_ca_host is defined
+          - nebula_ca_host in hostvars
+          - nebula_ca_host == hostvars[ansible_play_hosts_all[0]].nebula_ca_host
+          - nebula_rotation_id is defined
+          - nebula_rotation_id is match('^[A-Za-z0-9_-]+$')
+        fail_msg: "Prepare requires the complete Linux participant group, a common CA host and a safe rotation ID."
+  tasks:
+    - name: Prepare a replacement CA
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_ca
+      run_once: true
+    - name: Distribute and load overlapping trust
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_trust

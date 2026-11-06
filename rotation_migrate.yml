@@ -1,0 +1,53 @@
+---
+- name: Require overlapping trust on all participants
+  hosts: nebula_rotation
+  strategy: linear
+  gather_facts: true
+  any_errors_fatal: true
+  become: true
+  vars:
+    rotation_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+  pre_tasks:
+    - name: Select the configured CA host or the default lighthouse
+      set_fact:
+        nebula_ca_host: "{{ nebula_ca_host | default(groups['nebula_lighthouse'][0]) }}"
+    - name: Require the complete Linux participant group
+      assert:
+        that:
+          - groups.get('nebula_rotation', []) | length > 0
+          - ansible_play_hosts_all | sort == groups['nebula_rotation'] | sort
+          - ansible_facts['system'] == 'Linux'
+          - not ansible_check_mode
+          - nebula_ca_host is defined
+          - nebula_ca_host in hostvars
+          - nebula_ca_host == hostvars[ansible_play_hosts_all[0]].nebula_ca_host
+          - nebula_rotation_id is match('^[A-Za-z0-9_-]+$')
+  tasks:
+    - name: Require and reload prepared trust
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_require_trust
+
+- name: Reissue and activate certificates sequentially
+  hosts: nebula_rotation
+  strategy: linear
+  serial: 1
+  gather_facts: true
+  any_errors_fatal: true
+  become: true
+  vars:
+    rotation_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+    rotation_cert_name: "{{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}"
+  tasks:
+    - name: Sign and activate this participant
+      include_role:
+        name: "{{ nebula_rotation_role_path | default(playbook_dir) }}"
+        tasks_from: rotation_leaf
+    - name: Reset management connection
+      meta: reset_connection
+      when: ansible_connection | default('ssh') != 'local'
+    - name: Verify management connection before the next participant
+      wait_for_connection:
+        timeout: 60
+        connect_timeout: 5
+      when: ansible_connection | default('ssh') != 'local'

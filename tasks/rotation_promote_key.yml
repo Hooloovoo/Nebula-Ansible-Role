@@ -1,0 +1,23 @@
+---
+- name: Preserve the existing signing key
+  copy:
+    src: "{{ nebula_config_dir }}/ca.key"
+    dest: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/old.key"
+    remote_src: true
+    force: false
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  no_log: true
+  diff: false
+
+- name: Promote the replacement signing key
+  copy:
+    src: "{{ nebula_config_dir }}/ca-rotations/{{ nebula_rotation_id }}/ca.key"
+    dest: "{{ nebula_config_dir }}/ca.key"
+    remote_src: true
+    mode: '0600'
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  no_log: true
+  diff: false

@@ -1,0 +1,67 @@
+---
+# Verify a CA certificate/key pair without touching any live host identity.
+- name: Inspect role-managed lighthouse certificate
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/{{ nebula_lighthouse_hostname }}.crt"]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  register: rotation_check_leaf_output
+
+- name: Inspect signing capabilities
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", sign, -help]
+  delegate_to: "{{ nebula_ca_host }}"
+  become: true
+  changed_when: false
+  failed_when: false
+  register: rotation_check_help
+
+- name: Verify CA key with a temporary certificate
+  block:
+    - name: Create private signing-check directory
+      tempfile:
+        state: directory
+        prefix: nebula-ca-check-
+      delegate_to: "{{ nebula_ca_host }}"
+      become: true
+      changed_when: false
+      register: rotation_check_tmp
+
+    - name: Stage the existing public key
+      copy:
+        content: "{{ rotation_check_leaf_output.stdout | from_json | rotation_public_key }}"
+        dest: "{{ rotation_check_tmp.path }}/source.pub"
+        mode: '0600'
+      delegate_to: "{{ nebula_ca_host }}"
+      become: true
+      changed_when: false
+
+    - name: Sign temporary certificate
+      command:
+        argv: >-
+          {{ (rotation_check_leaf_output.stdout | from_json) | rotation_leaf_argv(
+             nebula_config_dir ~ '/nebula-cert', rotation_check_ca, rotation_check_key,
+             rotation_check_tmp.path ~ '/source.pub', rotation_check_tmp.path ~ '/check.crt',
+             '-version' in (rotation_check_help.stdout ~ rotation_check_help.stderr),
+             '-networks' in (rotation_check_help.stdout ~ rotation_check_help.stderr)) }}
+      delegate_to: "{{ nebula_ca_host }}"
+      become: true
+      changed_when: false
+      no_log: true
+
+    - name: Verify temporary certificate
+      command:
+        argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ rotation_check_ca }}", -crt, "{{ rotation_check_tmp.path }}/check.crt"]
+      delegate_to: "{{ nebula_ca_host }}"
+      become: true
+      changed_when: false
+  always:
+    - name: Remove signing-check directory
+      file:
+        path: "{{ rotation_check_tmp.path }}"
+        state: absent
+      delegate_to: "{{ nebula_ca_host }}"
+      become: true
+      changed_when: false
+      when: rotation_check_tmp.path is defined
