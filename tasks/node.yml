@@ -1,23 +1,36 @@
-- name: Sign certificate on lighthouse and fetch cert/key/CA
-  include_tasks: sign.yml
-
-- name: Ensure node has hosts file entry for lighthouse
-  lineinfile:
-    path: /etc/hosts
-    line: "{{ nebula_lighthouse_internal_ip_addr }} {{ nebula_lighthouse_hostname }}.neb"
-  when: nebula_node_lighthouse_in_hosts_file
-
-- name: Ensure Cert, Key, CA files exist
-  copy:
-    dest: "{{ nebula_config_dir }}/{{ item['item'] }}"
-    content: "{{ item['content'] | b64decode }}"
-    owner: root
-    group: root
-    mode: 0600
-  loop: "{{ lighthouse_files.results }}"
-  loop_control:
-    label: "{{ item['item'] }}"
-  notify: restart nebula
+- name: Sign and install node PKI
+  vars:
+    pki_in_place: "{{ inventory_hostname == nebula_ca_host }}"
+    pki_names: ["{{ inventory_hostname }}.crt", "{{ inventory_hostname }}.key", ca.crt]
+    pki_files: "{{ lighthouse_files.results }}"
+  block:
+    - name: Snapshot live PKI before signing on this node
+      include_tasks: install_pki.yml
+      vars: {pki_phase: snapshot}
+      when: pki_in_place
+    - name: Sign certificate on lighthouse and fetch cert/key/CA
+      include_tasks: sign.yml
+    - name: Ensure node has hosts file entry for lighthouse
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ nebula_lighthouse_internal_ip_addr }} {{ nebula_lighthouse_hostname }}.neb"
+      when: nebula_node_lighthouse_in_hosts_file
+    - name: Install node PKI
+      include_tasks: install_pki.yml
+  rescue:
+    - name: Restore live PKI after signing or activation failure
+      include_tasks: install_pki.yml
+      vars: {pki_phase: restore}
+      when: pki_in_place and pki_backup.path is defined
+    - fail:
+        msg: "Node PKI update failed; previous live PKI was restored where available."
+  always:
+    - name: Remove signing snapshot
+      become: true
+      file: {path: "{{ pki_backup.path }}", state: absent}
+      changed_when: false
+      no_log: true
+      when: pki_in_place and not ansible_check_mode and pki_backup.path is defined
 
 - name: Ensure Nebula is configured
   template:
