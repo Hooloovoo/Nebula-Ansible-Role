@@ -60,11 +60,11 @@ and waits for the connection to come back.
 
 # Safe PKI updates
 
-On running Linux nodes and separate-CA lighthouses, changed certificate/key/CA files are backed up remotely, installed as a set, validated, and reloaded without restarting. Activation checks require the same active PID and, when available, journal evidence of the refreshed certificate and fingerprint with no PKI load errors. Failure restores the original files and reloads them before failing the play; root-only backups are removed automatically.
+On running Linux nodes and separate-CA lighthouses, changed certificate/key/CA files are backed up remotely, installed as a set, checked with both `nebula-cert verify` (leaf against the CA bundle) and `nebula -test` (configuration and key pair), and reloaded without restarting. Activation checks require the same active PID and, when available, journal evidence of the refreshed certificate and fingerprint with no PKI load errors. Failure restores the original files and reloads them before failing the play; root-only backups are removed automatically. Failure messages name the failed task and include a bounded diagnostic, or state that details are hidden when that task uses `no_log`.
 
 Nodes that also host the CA are snapshotted before signing, so in-place re-signing is detected. Signing still briefly removes the live certificate/key before replacing them; staged signing is a follow-up. A co-located CA/lighthouse has no automatic re-sign path: manually forcing its re-sign requires a manual reload.
 
-Without an active service and existing config, files are installed normally. Config changes retain validation and restart handling; unit/binary handling and Windows behavior are unchanged. Check mode performs no snapshot or reload. Existing certificate transport still uses registered slurp results; backups stay remote and new key-handling tasks suppress content and diffs.
+Without an active service and existing config, files are installed normally. Config changes retain validation and restart handling; unit/binary handling and Windows behavior are unchanged. Check mode performs no snapshot or reload. Existing certificate transport still uses registered slurp results; backups stay remote and key-copy/backup tasks suppress content and diffs. The two validation commands expose their non-secret diagnostics.
 
 # Custom CA Host
 

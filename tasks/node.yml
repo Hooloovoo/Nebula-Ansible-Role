@@ -22,8 +22,13 @@
       include_tasks: install_pki.yml
       vars: {pki_phase: restore}
       when: pki_in_place and pki_backup.path is defined
-    - fail:
-        msg: "Node PKI update failed; previous live PKI was restored where available."
+    - name: Stop after failed node PKI update
+      fail:
+        msg: >-
+          Node PKI update failed at '{{ ansible_failed_task.name | default('unknown task', true) }}':
+          {{ 'details hidden by no_log' if ((ansible_failed_task.no_log | default(false, true) | bool) or (ansible_failed_result._ansible_no_log | default(false) | bool)) else
+          (([ansible_failed_result.stderr | default(''), ansible_failed_result.module_stderr | default(''), ansible_failed_result.stdout | default(''), ansible_failed_result.module_stdout | default(''), ansible_failed_result.msg | default('')] | map('trim') | select | first | default('no diagnostic output', true)).splitlines() | last | truncate(300)) }}.
+          Previous live PKI was restored where available.
   always:
     - name: Remove signing snapshot
       become: true

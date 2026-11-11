@@ -101,10 +101,13 @@
         - name: Validate and activate changed PKI
           when: pki_phase == 'apply' and not ansible_check_mode and pki_process.rc == 0 and pki_changed | length > 0
           block:
+            - name: Verify node certificate against the CA bundle
+              command: {argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ nebula_config_dir }}/ca.crt", -crt, "{{ nebula_config_dir }}/{{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}.crt"]}
+              changed_when: false
+
             - name: Validate complete PKI set
               command: {argv: ["{{ nebula_config_dir }}/nebula", -test, -config, "{{ nebula_config_dir }}/config.yml"]}
               changed_when: false
-              no_log: true
 
             - name: Record journal cursor when available
               shell: "if command -v journalctl >/dev/null; then journalctl -u {{ pki_service | quote }} -n 0 --show-cursor --no-pager; fi"
@@ -144,8 +147,13 @@
           include_tasks: install_pki.yml
           vars: {pki_phase: restore}
           when: not pki_in_place | default(false) and pki_backup.path is defined
-        - fail:
-            msg: "PKI installation or activation failed; restoring the pre-run files where available."
+        - name: Stop after failed PKI activation
+          fail:
+            msg: >-
+              PKI installation or activation failed at '{{ ansible_failed_task.name | default('unknown task', true) }}':
+              {{ 'details hidden by no_log' if ((ansible_failed_task.no_log | default(false, true) | bool) or (ansible_failed_result._ansible_no_log | default(false) | bool)) else
+              (([ansible_failed_result.stderr | default(''), ansible_failed_result.module_stderr | default(''), ansible_failed_result.stdout | default(''), ansible_failed_result.module_stdout | default(''), ansible_failed_result.msg | default('')] | map('trim') | select | first | default('no diagnostic output', true)).splitlines() | last | truncate(300)) }}.
+              The pre-run files were restored where available.
       always:
         - name: Remove transaction backup
           file: {path: "{{ pki_backup.path }}", state: absent}
