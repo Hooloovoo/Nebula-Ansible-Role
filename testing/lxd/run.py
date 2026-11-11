@@ -240,7 +240,11 @@ class Suite:
     def cert(self, host):
         out = self.guest('lh', '/opt/nebula/nebula-cert', 'print', '-json', '-path', '/opt/nebula/' + host + '.crt').stdout
         details = json.loads(out)
-        return (details[0] if isinstance(details, list) else details)['details']
+        details = (details[0] if isinstance(details, list) else details)['details']
+        # Nebula 1.10+ renames these fields even for version-1 certificates.
+        details.setdefault('ips', details.get('networks') or [])
+        details.setdefault('subnets', details.get('unsafeNetworks') or [])
+        return details
 
     def hashes(self, host):
         out = self.guest('lh', 'sha256sum', '/opt/nebula/' + host + '.crt', '/opt/nebula/' + host + '.key').stdout
@@ -296,6 +300,23 @@ class Suite:
             self.groups['client'] = groups
             self.deploy('client')
             self.check('first node signing ' + str(groups), self.groups_are('client', groups))
+
+    def certificate_format_upgrade(self):
+        self.version = '1.8.0'
+        self.deploy()
+        before = {host: self.hashes(host) for host in ('lh', 'server', 'client')}
+        self.version = '1.11.2'
+        self.deploy()
+        for host in ('lh', 'server', 'client'):
+            self.check(host + ' v1 certificate and key survive Nebula 1.11.2 upgrade',
+                       self.hashes(host) == before[host])
+            printed = json.loads(self.guest('lh', '/opt/nebula/nebula-cert', 'print', '-json',
+                                            '-path', '/opt/nebula/' + host + '.crt').stdout)
+            printed = printed[0] if isinstance(printed, list) else printed
+            self.check(host + ' certificate remains version 1', printed.get('version') == 1)
+        self.check('server v1 certificate retains groups after upgrade',
+                   self.groups_are('server', ['service', 'initial']))
+        self.check('client v1 certificate retains empty groups after upgrade', self.groups_are('client', []))
 
     def config(self, host):
         return yaml.safe_load(self.guest(host, 'cat', '/opt/nebula/config.yml').stdout)
@@ -429,7 +450,7 @@ def main():
     parser.add_argument('--memory', default='1GiB')
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
-    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'firewall', 'ca-host'], default='auto')
+    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host'], default='auto')
     parser.add_argument('--role-path', type=Path, default=ROOT, help='role checkout to test (default: repository containing the suite)')
     parser.add_argument('--baseline-role-path', type=Path, help='optional upstream checkout for the CA default upgrade test')
     parser.add_argument('--artifacts', default=str(Path(tempfile.gettempdir()) / 'nebula-lxd-tests'))
@@ -454,23 +475,28 @@ def main():
     supported = []
     if 'nebula_cert_groups' in defaults:
         supported.append('certificates')
+        supported.append('certificate-format-upgrade')
         if all('rule.group' in t and 'rule.groups' in t for t in templates):
             supported.append('firewall')
     if 'nebula_ca_host' in defaults:
         supported.append('ca-host')
     if args.scenario == 'auto':
-        scenarios = supported
+        scenarios = [s for s in supported if s != 'certificate-format-upgrade']
         if not scenarios:
             parser.error('no supported features detected; use --role-path to select a checkout with certificate groups, firewall groups, or nebula_ca_host')
     elif args.scenario == 'all':
-        scenarios = ['certificates', 'firewall', 'ca-host']
+        scenarios = ['certificates', 'certificate-format-upgrade', 'firewall', 'ca-host']
     else:
         scenarios = [args.scenario]
     missing = [s for s in scenarios if s not in supported]
     if missing:
         parser.error(f'role checkout lacks required features for: {", ".join(missing)}; select another --role-path')
-    for version in args.versions or ['1.8.0', '1.9.5']:
+    versions = args.versions or ['1.8.0', '1.9.5']
+    for version in versions:
         for scenario in scenarios:
+            # This scenario has its own fixed upgrade pair, independent of the matrix.
+            if scenario == 'certificate-format-upgrade' and version != versions[0]:
+                continue
             suite = Suite(args, version)
             print(f'Running {scenario}, Nebula {version}; artifacts: {suite.path}', flush=True)
             failed = True
@@ -479,9 +505,12 @@ def main():
                 if scenario == 'ca-host':
                     suite.ca_host()
                 else:
-                    suite.deploy()
+                    if scenario != 'certificate-format-upgrade':
+                        suite.deploy()
                     if scenario == 'certificates':
                         suite.certificates()
+                    elif scenario == 'certificate-format-upgrade':
+                        suite.certificate_format_upgrade()
                     else:
                         suite.firewall()
                 failed = False

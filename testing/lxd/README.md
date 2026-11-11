@@ -43,7 +43,27 @@ python testing/lxd/run.py --remote myremote --project my-test-project --keep-on-
 python testing/lxd/run.py --cleanup /path/to/nebula-lxd-tests/nebtest-...
 ```
 
-`LXD_REMOTE` and `LXD_PROJECT` supply defaults for the corresponding options. `--image` defaults to `ubuntu:24.04`; `--profile` to `default`; `--memory` to `1GiB`; `--cpus` to `2`. Use `--artifacts` to choose the parent directory for logs and manifests. `--scenario` accepts `auto`, `all`, `certificates`, `firewall`, or `ca-host`. `all` requires all three features in the selected checkout; explicit scenarios fail fast if their feature is absent. The feature branches can therefore be tested independently before merging. The version option may be repeated. See `--help` for the complete interface.
+For certificate JSON compatibility (PR #25), select the role checkout containing
+the fix and run the release matrix explicitly:
+
+```sh
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/cert-json-compat --scenario certificates \
+  --nebula-version 1.8.0 --nebula-version 1.9.5 --nebula-version 1.10.0 \
+  --nebula-version 1.11.2 --nebula-version 1.12.0
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/cert-json-compat --scenario certificate-format-upgrade
+```
+
+`certificate-format-upgrade` creates version-1 certificates with Nebula 1.8.0,
+then upgrades to 1.11.2 and checks certificate/key hashes, certificate versions
+and groups. It runs once using that fixed pair regardless of `--nebula-version`.
+It is opt-in under `auto` and included under `all`; the ordinary default matrix
+remains 1.8.0 and 1.9.5. These tests use the selected checkout as-is: apply the
+compatibility fix when testing newer binaries, rather than patching the role in
+the test runner.
+
+`LXD_REMOTE` and `LXD_PROJECT` supply defaults for the corresponding options. `--image` defaults to `ubuntu:24.04`; `--profile` to `default`; `--memory` to `1GiB`; `--cpus` to `2`. Use `--artifacts` to choose the parent directory for logs and manifests. `--scenario` accepts `auto`, `all`, `certificates`, `certificate-format-upgrade`, `firewall`, or `ca-host`. `all` requires the corresponding features in the selected checkout; explicit scenarios fail fast if their feature is absent. The feature branches can therefore be tested independently before merging. The version option may be repeated. See `--help` for the complete interface.
 
 Every run uses random instance names and a per-run ownership marker. Normal cleanup removes only VMs created by that run. The manifest allows cleanup after an interruption; retained instances must still have the expected marker. Do not edit manifests or reuse instance names. If the client loses access or a launch fails before its marker is written, inspect the LXD project and resolve cleanup manually.
 
