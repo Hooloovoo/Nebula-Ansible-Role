@@ -76,6 +76,45 @@ stopped-service signing recovery, alternate logging settings, unprovisioned
 check mode or full CA rotation. Provisioned check mode is covered. Peer probes
 in the tests do not mean that the role itself performs connectivity checks.
 
+## Explicit PKI task-file refactor
+
+Role revision `5570cc9` splits snapshot, remote backup and restore into explicit
+task files, keeping apply in `install_pki.yml` and removing `pki_phase` dispatch.
+The node signing caller owns recovery/cleanup for in-place signing; ordinary
+installations own their transactions. Snapshot initialization clears old
+transaction facts, and ordinary no-op installations defer file backups.
+
+The `safe-apply` scenario passed **137 assertions each on 1.8.0 and 1.11.2**
+against the refactor. The baseline was the pre-refactor safe-PKI role `a577b2a`;
+both throwaway role checkouts included PR #25's two JSON lookups. Baseline
+upgrade reported zero changes and preserved PKI hashes and service PIDs. The
+runs also covered node/lighthouse rollback, in-place CA-node signing and
+interrupted signing, wrong-CA/key-mismatch diagnostics, backup cleanup,
+provisioned check/diff mode, persistent streams and fresh handshakes.
+
+Run IDs: `nebtest-4d9a5dd918` (1.8.0), `nebtest-8edfc881c8` (1.11.2). YAML
+parsing and Ansible playbook syntax checks passed. The controller/guest setup
+was the same as above, with Ansible pipelining enabled. The test runner was
+`27f9306`.
+
+```sh
+PATH="/snap/lxd/current/bin:/tmp/opencode/regression-venv/bin:$PATH" \
+LXD_CONF="$HOME/snap/lxd/common/config" \
+ANSIBLE_COLLECTIONS_PATH=/tmp/opencode/collections ANSIBLE_PIPELINING=true \
+/tmp/opencode/regression-venv/bin/python testing/lxd/run.py \
+  --remote mythie --project opencode-temp \
+  --role-path /tmp/opencode/pki-refactor-test \
+  --baseline-role-path /tmp/opencode/regression-role \
+  --scenario safe-apply --nebula-version 1.8.0 --nebula-version 1.11.2 --cpus 1
+```
+
+This is a structural refactor, not the planned IP-change/restart fix. The known
+IP-change defect above remains open; that separate acceptance scenario was not
+rerun for this refactor. Same-play repeated-include failure cases and failure
+of restoration itself were not independently injected in these runs. The
+ordinary default release matrix and other coverage limitations remain as
+documented above. All VMs from these runs were removed.
+
 Logs live under `/tmp/nebula-lxd-tests/<run-id>/` while the temporary directory
 is retained; run IDs are identifiers, not a promise of permanent artifact
 availability. Re-run the README commands for current evidence.
