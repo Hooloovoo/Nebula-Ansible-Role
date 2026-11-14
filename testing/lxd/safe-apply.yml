@@ -1,0 +1,44 @@
+---
+# Test-only single-file/invalid-input entry point; production has no test hook.
+- hosts: all
+  become: true
+  tasks:
+    - name: Read desired test PKI from signer
+      slurp:
+        src: "{{ '/opt/nebula' if item == 'ca.crt' else test_leaf_dir | default('/opt/nebula') }}/{{ wrong_key | default(item) if item.endswith('.key') else item }}"
+      delegate_to: "{{ nebula_ca_host | default(groups['nebula_lighthouse'][0]) }}"
+      loop: ["{{ certificate_name }}.crt", "{{ certificate_name }}.key", ca.crt]
+      register: desired
+      no_log: true
+    - name: Prove the matching wrong-CA pair passes configuration validation
+      when: probe_wrong_ca | default(false)
+      block:
+        - tempfile: {state: directory, prefix: wrong-ca-probe-}
+          register: probe_dir
+          no_log: true
+        - copy:
+            content: "{{ item.content | b64decode }}"
+            dest: "{{ probe_dir.path }}/{{ item.item }}"
+            mode: '0600'
+          loop: "{{ desired.results }}"
+          no_log: true
+        - slurp: {src: /opt/nebula/config.yml}
+          register: probe_config
+          no_log: true
+        - copy:
+            content: "{{ probe_config.content | b64decode | replace('/opt/nebula/' ~ certificate_name ~ '.crt', probe_dir.path ~ '/' ~ certificate_name ~ '.crt') | replace('/opt/nebula/' ~ certificate_name ~ '.key', probe_dir.path ~ '/' ~ certificate_name ~ '.key') }}"
+            dest: "{{ probe_dir.path }}/config.yml"
+            mode: '0600'
+          no_log: true
+        - name: Require nebula -test to accept the untrusted matching pair
+          command: {argv: [/opt/nebula/nebula, -test, -config, "{{ probe_dir.path }}/config.yml"]}
+          changed_when: false
+      always:
+        - file: {path: "{{ probe_dir.path }}", state: absent}
+          no_log: true
+          when: probe_dir.path is defined
+    - include_role:
+        name: "{{ tested_role }}"
+        tasks_from: install_pki
+      vars:
+        pki_files: "{{ [desired.results[-1]] if ca_only | default(false) else desired.results }}"

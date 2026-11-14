@@ -318,6 +318,280 @@ class Suite:
                    self.groups_are('server', ['service', 'initial']))
         self.check('client v1 certificate retains empty groups after upgrade', self.groups_are('client', []))
 
+    def fresh_handshake(self, source, peer, address):
+        def pid(host):
+            service = 'lighthouse' if host == 'lh' else 'nebula'
+            return self.guest(host, 'systemctl', 'show', service, '-p', 'MainPID', '--value').stdout.strip()
+        source_pid, peer_pid = pid(source), pid(peer)
+        # Restart only the peer, after the continuity check. Its empty hostmap
+        # forces a new cryptographic handshake with the reloaded process.
+        self.guest(peer, 'systemctl', 'restart', 'lighthouse' if peer == 'lh' else 'nebula')
+        self.check(source + ' handshake peer starts a new process', int(pid(peer)) > 0 and pid(peer) != peer_pid)
+        self.guest(source, 'ping', '-c', '10', '-W', '5', address)
+        self.check(source + ' fresh handshake keeps reloaded PID', int(source_pid) > 0 and pid(source) == source_pid)
+
+    def safe_apply(self):
+        def service(host):
+            return 'lighthouse' if host == 'lh' else 'nebula'
+
+        def pid(host):
+            self.guest(host, 'systemctl', 'is-active', service(host))
+            value = self.guest(host, 'systemctl', 'show', service(host), '-p', 'MainPID', '--value').stdout.strip()
+            self.check(host + ' has a nonzero PID', int(value) > 0)
+            return value
+
+        def cursor(host):
+            out = self.guest(host, 'journalctl', '-u', service(host), '-n', '0', '--show-cursor', '--no-pager').stdout
+            return re.search(r'-- cursor: (.+)', out)[1]
+
+        def journal(host, position):
+            return self.guest(host, 'journalctl', '-u', service(host), '--after-cursor=' + position,
+                              '--no-pager', '-o', 'cat').stdout
+
+        def hashes(host, name):
+            return self.ca_hashes(host, name + '.crt', name + '.key', 'ca.crt')
+
+        def backups(host):
+            self.check(host + ' has no leftover PKI backups', self.guest(host, 'python3', '-c',
+                       'import glob; assert not glob.glob("/tmp/nebula-pki-*")').returncode == 0)
+
+        def activate(host, name, old_pid, position):
+            text = journal(host, position)
+            printed = self.guest(host, '/opt/nebula/nebula-cert', 'print', '-path', '/opt/nebula/' + name + '.crt').stdout
+            fingerprint = re.search(r'(?i)fingerprint[": ]+([a-f0-9]+)', printed)[1]
+            self.check(host + ' reload keeps PID', pid(host) == old_pid)
+            self.check(host + ' reload reports current fingerprint', 'refreshed from disk' in text and fingerprint in text)
+            self.check(host + ' has no PKI load errors', 'Could not load client cert' not in text and 'Failed to load ca from config' not in text)
+            backups(host)
+
+        def run(inventory, playbook='reconcile.yml', limit=None, extra=(), check=True):
+            command = ['ansible-playbook', '-i', str(inventory), str(HERE / playbook)]
+            if limit:
+                command += ['--limit', limit]
+            start = self.log.stat().st_size if self.log.exists() else 0
+            status = self.command(command + list(extra), check=check, timeout=1200)
+            with self.log.open() as log:
+                log.seek(start)
+                output = log.read()
+            return status, output
+
+        def unchanged(host, name, inventory, playbook, limit):
+            old_pid, before, position = pid(host), hashes(host, name), cursor(host)
+            for flags in ((), ('--check', '--diff')):
+                _, output = run(inventory, playbook, limit, flags)
+                counts = re.findall(r'changed=(\d+)', output)
+                self.check(host + ' no-op/check reports zero changes', bool(counts) and all(int(n) == 0 for n in counts))
+                self.check(host + ' no-op/check preserves files and PID', before == hashes(host, name) and old_pid == pid(host))
+                self.check(host + ' no-op/check sends no HUP', 'Caught HUP' not in journal(host, position))
+                backups(host)
+
+        # A single TCP connection, with no reconnection path, carries messages
+        # throughout the Ansible run. A crash or reconnect cannot pass this test.
+        echo = '''import socket
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", 18081))
+s.listen()
+while True:
+    c, _ = s.accept()
+    try:
+        while True:
+            data = c.recv(64)
+            if not data: break
+            c.sendall(data)
+    finally:
+        c.close()
+'''
+        stream = '''import socket, sys, time
+from pathlib import Path
+s = socket.create_connection((sys.argv[1], 18081), 10)
+s.settimeout(5)
+reader = s.makefile('rb')
+i = 0
+while True:
+    s.sendall(b"alive")
+    assert reader.read(5) == b"alive"
+    i += 1
+    Path("/run/pki-stream-count").write_text(str(i))
+    time.sleep(.2)
+'''
+
+        def start_stream(source, target, address):
+            self.guest(target, 'systemd-run', '--unit=pki-echo', '--collect', 'python3', '-c', echo)
+            time.sleep(1)
+            self.guest(source, 'systemd-run', '--unit=pki-stream', '--collect', 'python3', '-c', stream, address)
+            time.sleep(2)
+            return int(self.guest(source, 'cat', '/run/pki-stream-count').stdout)
+
+        def stream_survives(source, count):
+            self.guest(source, 'systemctl', 'is-active', 'pki-stream')
+            self.check('established TCP connection survives', int(self.guest(source, 'cat', '/run/pki-stream-count').stdout) > count)
+            self.guest(source, 'systemctl', 'stop', 'pki-stream')
+
+        # Initial deploy was on fresh VMs; verify there was no first-install HUP.
+        for host in self.names:
+            self.check(host + ' first install sends no HUP', 'Caught HUP' not in
+                       self.guest(host, 'journalctl', '-u', service(host), '--no-pager', '-o', 'cat').stdout)
+        before, old_pid, position = hashes('server', 'server'), pid('server'), cursor('server')
+        count = start_stream('client', 'server', '10.193.0.2')
+        self.groups['server'].append('safe-apply')
+        self.deploy('server')
+        self.check('group re-sign changes node cert/key', before[:2] != hashes('server', 'server')[:2])
+        activate('server', 'server', old_pid, position)
+        stream_survives('client', count)
+        self.fresh_handshake('server', 'lh', '10.193.0.1')
+        old_pid, position, before = pid('server'), cursor('server'), hashes('server', 'server')
+        self.guest('lh', 'python3', '-c', 'from pathlib import Path; p=Path("/opt/nebula/ca.crt"); p.write_bytes(p.read_bytes()+b"\\n")')
+        run(self.inventory(), 'safe-apply.yml', 'server', ['-e', json.dumps({'certificate_name': 'server', 'ca_only': True})])
+        self.check('single CA-file caller changes only CA hash', before[:2] == hashes('server', 'server')[:2] and before[2] != hashes('server', 'server')[2])
+        activate('server', 'server', old_pid, position)
+        unchanged('server', 'server', self.inventory(), 'reconcile.yml', 'server')
+        self.inbound['server'] = [{'port': 'any', 'proto': 'icmp', 'host': 'any'}]
+        old_pid = pid('server')
+        self.deploy('server')
+        self.check('config change still restarts', old_pid != pid('server'))
+        self.inbound['server'] = ANY
+        self.groups['server'].append('combined-change')
+        old_pid = pid('server')
+        self.deploy('server')
+        self.check('combined config and PKI change succeeds and restarts', old_pid != pid('server'))
+
+        # Fresh separate-CA topology also exercises lighthouse installation.
+        self.cleanup()
+        self.provision()
+        self.ca_deploy(separate=True)
+        self.ca_deploy(separate=True, ca_node=True, limit='cah')
+        inventory = self.ca_inventory(separate=True, ca_node=True)
+        for host, name, wrong in [('server', 'server', 'lh.key'), ('lh', 'lh', 'server.key')]:
+            before, old_pid, position = hashes(host, name), pid(host), cursor(host)
+            status, output = run(inventory, 'safe-apply.yml', name,
+                            ['-e', json.dumps({'certificate_name': name, 'wrong_key': wrong})], check=False)
+            self.check(host + ' invalid PKI fails play', status != 0)
+            self.check(host + ' key mismatch identifies validation failure',
+                       re.search(r"failed at 'Validate complete PKI set': [^\n]*pair", output) is not None)
+            self.check(host + ' rollback restores all hashes', before == hashes(host, name))
+            activate(host, name, old_pid, position)
+            self.guest(host, '/opt/nebula/nebula', '-test', '-config', '/opt/nebula/config.yml')
+
+        # A matching cert/key from another CA passes -test, but is untrusted.
+        # Keep the real CA bundle in both the probe config and installed set.
+        rogue = self.guest('client', 'python3', '-c',
+                           'import tempfile; print(tempfile.mkdtemp(prefix="wrong-ca-", dir="/opt/nebula"))').stdout.strip()
+        try:
+            self.guest('client', '/opt/nebula/nebula-cert', 'ca', '-name', 'untrusted-test-ca', '-duration', '87600h',
+                       '-out-crt', rogue + '/ca.crt', '-out-key', rogue + '/ca.key')
+            for host, name, address in [('server', 'server', '10.193.0.2'), ('lh', 'lh', '10.193.0.1')]:
+                self.guest('client', '/opt/nebula/nebula-cert', 'sign', '-ca-crt', rogue + '/ca.crt',
+                           '-ca-key', rogue + '/ca.key', '-name', name, '-ip', address + '/24',
+                           '-out-crt', rogue + '/' + name + '.crt', '-out-key', rogue + '/' + name + '.key')
+                self.guest('client', '/opt/nebula/nebula-cert', 'verify', '-ca', rogue + '/ca.crt',
+                           '-crt', rogue + '/' + name + '.crt')
+                rejection = self.guest('client', '/opt/nebula/nebula-cert', 'verify', '-ca', '/opt/nebula/ca.crt',
+                                       '-crt', rogue + '/' + name + '.crt', check=False)
+                self.check(host + ' wrong-CA fixture is rejected by real trust', rejection.returncode != 0)
+                cause = (rejection.stderr or rejection.stdout).strip().splitlines()[-1]
+                # Run -test on the actual target with its original CA and the
+                # rogue pair, independently proving this is not a key mismatch.
+                before, old_pid, position = hashes(host, name), pid(host), cursor(host)
+                status, output = run(inventory, 'safe-apply.yml', name,
+                                     ['-e', json.dumps({'certificate_name': name, 'test_leaf_dir': rogue,
+                                                       'probe_wrong_ca': True})], check=False)
+                self.check(host + ' wrong-CA certificate fails play', status != 0)
+                diagnostic = re.search(r"failed at 'Verify node certificate against the CA bundle': ([^\n]+)", output)
+                self.check(host + ' wrong-CA failure shows trust verification cause',
+                           diagnostic is not None and cause[:200] in diagnostic[1])
+                self.check(host + ' wrong-CA rollback restores all hashes', before == hashes(host, name))
+                activate(host, name, old_pid, position)
+
+        finally:
+            self.guest('client', 'rm', '-rf', '--', rogue)
+
+        count = start_stream('server', 'lh', '10.193.0.1')
+        old_pid, position = pid('lh'), cursor('lh')
+        self.guest('client', 'rm', '/opt/nebula/lh.crt', '/opt/nebula/lh.key')
+        self.ca_deploy(separate=True, ca_node=True, limit='lh')
+        activate('lh', 'lh', old_pid, position)
+        stream_survives('server', count)
+        self.fresh_handshake('lh', 'server', '10.193.0.2')
+        unchanged('lh', 'lh', inventory, 'ca-deploy.yml', 'lh')
+
+        # CA-node: signing happens directly in its running PKI directory.
+        old_pid, position, before = pid('client'), cursor('client'), hashes('client', 'cah')
+        count = start_stream('server', 'client', '10.193.0.3')
+        changed_groups = ['-e', json.dumps({'nebula_cert_groups': ['ca-node-safe']})]
+        self.ca_deploy(separate=True, ca_node=True, limit='cah', extra=changed_groups)
+        self.check('CA-node live files changed', before[:2] != hashes('client', 'cah')[:2])
+        activate('client', 'cah', old_pid, position)
+        stream_survives('server', count)
+        self.fresh_handshake('client', 'lh', '10.193.0.1')
+        inventory = self.ca_inventory(separate=True, ca_node=True)
+        # Preserve the changed desired groups for no-op and failure tests.
+        data = json.loads(inventory.read_text())
+        data['all']['vars']['nebula_cert_groups'] = ['ca-node-safe']
+        inventory.write_text(json.dumps(data))
+        unchanged('client', 'cah', inventory, 'ca-deploy.yml', 'cah')
+        before, old_pid, position = hashes('client', 'cah'), pid('client'), cursor('client')
+        rogue = self.guest('client', 'python3', '-c',
+                           'import tempfile; print(tempfile.mkdtemp(prefix="wrong-ca-", dir="/opt/nebula"))').stdout.strip()
+        self.guest('client', 'mv', '/opt/nebula/nebula-cert', '/opt/nebula/nebula-cert.real')
+        try:
+            self.guest('client', '/opt/nebula/nebula-cert.real', 'ca', '-name', 'untrusted-test-ca', '-duration', '87600h',
+                       '-out-crt', rogue + '/ca.crt', '-out-key', rogue + '/ca.key')
+            wrapper = '#!/bin/sh\n/opt/nebula/nebula-cert.real "$@" || exit $?\nif [ "$1" = sign ]; then cp /opt/nebula/lh.key /opt/nebula/cah.key; fi\n'
+            self.guest('client', 'python3', '-c', 'from pathlib import Path; import sys; p=Path("/opt/nebula/nebula-cert"); p.write_text(sys.argv[1]); p.chmod(0o755)', wrapper)
+            status, _ = run(inventory, 'ca-deploy.yml', 'cah',
+                            ['-e', json.dumps({'nebula_cert_groups': ['invalid-new']})], check=False)
+            self.check('CA-node invalid in-place signing fails', status != 0)
+            self.check('CA-node rollback restores hashes', before == hashes('client', 'cah'))
+            activate('client', 'cah', old_pid, position)
+            wrapper = ('#!/bin/sh\nif [ "$1" = sign ]; then shift; exec /opt/nebula/nebula-cert.real sign '
+                       '-ca-crt ' + rogue + '/ca.crt -ca-key ' + rogue + '/ca.key "$@"; fi\n'
+                       'exec /opt/nebula/nebula-cert.real "$@"\n')
+            self.guest('client', 'python3', '-c', 'from pathlib import Path; import sys; Path("/opt/nebula/nebula-cert").write_text(sys.argv[1])', wrapper)
+            position = cursor('client')
+            status, output = run(inventory, 'ca-deploy.yml', 'cah',
+                                 ['-e', json.dumps({'nebula_cert_groups': ['wrong-ca']})], check=False)
+            self.check('CA-node wrong-CA signing fails at trust verification', status != 0 and
+                       'Verify node certificate against the CA bundle' in output and
+                       'PKI installation or activation failed at' in output)
+            self.check('CA-node wrong-CA rollback restores hashes', before == hashes('client', 'cah'))
+            activate('client', 'cah', old_pid, position)
+            # Failure before a complete keypair exists exercises outer rescue.
+            wrapper = '#!/bin/sh\nif [ "$1" = sign ]; then exit 42; fi\nexec /opt/nebula/nebula-cert.real "$@"\n'
+            self.guest('client', 'python3', '-c', 'from pathlib import Path; import sys; Path("/opt/nebula/nebula-cert").write_text(sys.argv[1])', wrapper)
+            status, _ = run(inventory, 'ca-deploy.yml', 'cah',
+                            ['-e', json.dumps({'nebula_cert_groups': ['sign-fails']})], check=False)
+            self.check('CA-node interrupted signing fails and restores', status != 0 and before == hashes('client', 'cah') and old_pid == pid('client'))
+            backups('client')
+        finally:
+            self.guest('client', 'mv', '/opt/nebula/nebula-cert.real', '/opt/nebula/nebula-cert')
+            self.guest('client', 'rm', '-rf', '--', rogue)
+
+    def safe_apply_ip_change(self):
+        before = self.ca_hashes('server', 'server.crt', 'server.key', 'ca.crt')
+        old_pid = self.guest('server', 'systemctl', 'show', 'nebula', '-p', 'MainPID', '--value').stdout.strip()
+        self.node_ips['server'] = '10.193.0.4'
+        status = self.command(['ansible-playbook', '-i', str(self.inventory()),
+                               str(HERE / 'reconcile.yml'), '--limit', 'server'], check=False, timeout=1200)
+        # Gather evidence before assertions, including fresh peer traffic.
+        addresses = self.guest('server', 'ip', '-4', '-o', 'addr', 'show', 'dev', 'neb0').stdout
+        self.guest('server', '/opt/nebula/nebula-cert', 'print', '-json', '-path', '/opt/nebula/server.crt')
+        self.guest('server', 'journalctl', '-u', 'nebula', '-n', '80', '--no-pager', '-o', 'cat')
+        self.guest('lh', 'systemctl', 'restart', 'lighthouse')
+        address = '10.193.0.4' if status == 0 else '10.193.0.2'
+        connected = self.guest('lh', 'ping', '-c', '3', '-W', '5', address, check=False).returncode == 0
+        if status == 0:
+            self.check('successful IP change updates the tunnel address', '10.193.0.4/24' in addresses)
+            self.check('successful IP change permits a fresh handshake at the new address', connected)
+        else:
+            self.check('rejected IP change restores original files',
+                       before == self.ca_hashes('server', 'server.crt', 'server.key', 'ca.crt'))
+            self.check('rejected IP change preserves the process and address',
+                       old_pid == self.guest('server', 'systemctl', 'show', 'nebula', '-p', 'MainPID', '--value').stdout.strip()
+                       and '10.193.0.2/24' in addresses)
+            self.check('rejected IP change retains connectivity at the original address', connected)
+        self.guest('server', 'python3', '-c', 'import glob; assert not glob.glob("/tmp/nebula-pki-*")')
+
     def config(self, host):
         return yaml.safe_load(self.guest(host, 'cat', '/opt/nebula/config.yml').stdout)
 
@@ -450,9 +724,9 @@ def main():
     parser.add_argument('--memory', default='1GiB')
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
-    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host'], default='auto')
+    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'safe-apply', 'safe-apply-ip-change'], default='auto')
     parser.add_argument('--role-path', type=Path, default=ROOT, help='role checkout to test (default: repository containing the suite)')
-    parser.add_argument('--baseline-role-path', type=Path, help='optional upstream checkout for the CA default upgrade test')
+    parser.add_argument('--baseline-role-path', type=Path, help='optional baseline checkout for CA-host or safe-PKI upgrade tests')
     parser.add_argument('--artifacts', default=str(Path(tempfile.gettempdir()) / 'nebula-lxd-tests'))
     parser.add_argument('--keep-on-failure', action='store_true')
     parser.add_argument('--cleanup', type=Path, metavar='RUN_DIRECTORY')
@@ -480,12 +754,16 @@ def main():
             supported.append('firewall')
     if 'nebula_ca_host' in defaults:
         supported.append('ca-host')
+    if ('nebula_cert_groups' in defaults and 'nebula_ca_host' in defaults
+            and (args.role_path / 'tasks/install_pki.yml').is_file()):
+        supported.append('safe-apply')
+        supported.append('safe-apply-ip-change')
     if args.scenario == 'auto':
-        scenarios = [s for s in supported if s != 'certificate-format-upgrade']
+        scenarios = [s for s in supported if s in ('certificates', 'firewall', 'ca-host')]
         if not scenarios:
             parser.error('no supported features detected; use --role-path to select a checkout with certificate groups, firewall groups, or nebula_ca_host')
     elif args.scenario == 'all':
-        scenarios = ['certificates', 'certificate-format-upgrade', 'firewall', 'ca-host']
+        scenarios = ['certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'safe-apply', 'safe-apply-ip-change']
     else:
         scenarios = [args.scenario]
     missing = [s for s in scenarios if s not in supported]
@@ -505,12 +783,33 @@ def main():
                 if scenario == 'ca-host':
                     suite.ca_host()
                 else:
-                    if scenario != 'certificate-format-upgrade':
+                    if scenario == 'safe-apply' and args.baseline_role_path:
+                        tested = args.role_path
+                        try:
+                            args.role_path = args.baseline_role_path
+                            suite.deploy()
+                        finally:
+                            args.role_path = tested
+                        original = {host: suite.ca_hashes(host, host + '.crt', host + '.key', 'ca.crt') for host in suite.names}
+                        processes = {host: suite.guest(host, 'systemctl', 'show', 'lighthouse' if host == 'lh' else 'nebula', '-p', 'MainPID', '--value').stdout for host in suite.names}
+                        position = suite.log.stat().st_size
+                        suite.deploy()
+                        with suite.log.open() as log:
+                            log.seek(position)
+                            counts = re.findall(r'changed=(\d+)', log.read())
+                        suite.check('baseline upgrade reports zero changes', len(counts) == 3 and all(int(n) == 0 for n in counts))
+                        suite.check('baseline upgrade preserves PKI hashes', all(original[host] == suite.ca_hashes(host, host + '.crt', host + '.key', 'ca.crt') for host in suite.names))
+                        suite.check('baseline upgrade preserves PIDs', all(processes[host] == suite.guest(host, 'systemctl', 'show', 'lighthouse' if host == 'lh' else 'nebula', '-p', 'MainPID', '--value').stdout for host in suite.names))
+                    elif scenario != 'certificate-format-upgrade':
                         suite.deploy()
                     if scenario == 'certificates':
                         suite.certificates()
                     elif scenario == 'certificate-format-upgrade':
                         suite.certificate_format_upgrade()
+                    elif scenario == 'safe-apply':
+                        suite.safe_apply()
+                    elif scenario == 'safe-apply-ip-change':
+                        suite.safe_apply_ip_change()
                     else:
                         suite.firewall()
                 failed = False
