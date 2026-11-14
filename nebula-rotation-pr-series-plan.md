@@ -298,6 +298,48 @@ entry. A bundle-order change alone must not unintentionally change the signer.
 Test multi-CA bundles, expired historical entries and unrelated valid CAs; retain
 unrelated trust unless explicitly selected for retirement.
 
+#### Version-specific expired-CA bundle contract
+
+A controlled LXD probe identified the difference specifically in
+`nebula-cert verify -ca supplied.bundle -crt leaf.crt`, using the same version-1
+leaf signed by a valid intended CA and the same expired historical CA. Both
+expired-first and expired-last orders were tested:
+
+| Operation on valid intended CA + expired historical CA | 1.10.3 | 1.11.2 |
+|---|---|---|
+| `nebula-cert verify` | Exit 1: `historical: certificate is expired` while adding the CA to the pool | Exit 0 |
+| `nebula -test` | Exit 0 | Exit 0 |
+| Daemon startup with real TUN | Starts; expired-CA warning | Starts; expired-CA warning |
+| SIGHUP from a valid-only bundle | Stays running; expired-CA warning, no CA-load error | Stays running; expired-CA warning, no CA-load error |
+
+On both releases an expired-only or malformed bundle fails configuration
+validation and startup. Reloading either invalid input leaves the process alive
+and logs `Failed to load ca from config`, even though a certificate-refreshed
+message also appears. Process survival and a leaf fingerprint are not proof that
+the intended trust change was accepted.
+
+The reproducible probe passes 68 operation-specific assertions; see
+[`testing/lxd/expired-ca-verification.md`](testing/lxd/expired-ca-verification.md)
+for fixtures, exact commands and scope. These are binary/process observations,
+not a fresh-handshake or full-role result. Do not infer a release cutoff or
+claim that expired CA certificates become valid trust anchors in 1.11.2.
+
+Keep three independent test contracts:
+
+- **Supplied runtime bundle:** retain the per-operation/version expectations
+  above. `nebula-cert verify` in 1.10.3 must not be treated as equivalent to that
+  daemon's bundle-loading behavior. Unknown releases need their own evidence.
+- **Signing:** select the intended single CA certificate and matching key;
+  historical or unrelated trust entries must not select the signing identity.
+- **Leaf verification:** verify against an isolated intended CA, and assert the
+  expected issuer fingerprint. Acceptance of a broader runtime trust bundle
+  must not let an unintended signer satisfy this check.
+
+Include a valid intended-CA control alongside the expired historical entry so a
+negative result is attributable to bundle handling, not a broken fixture. Keep
+the supplied bundle intact for its compatibility test; isolate signing and leaf
+verification inputs separately rather than silently filtering the tested bundle.
+
 ### 6.2 Preserve identities without forcing a representation
 
 Inventory hostname, certificate subject, file basename and service identity are

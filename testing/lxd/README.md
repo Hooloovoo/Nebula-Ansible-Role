@@ -146,6 +146,11 @@ scenario when its documented workflow can be exercised literally.
 See [verification results](verification.md) for the tested revisions, completed
 runs, known failing IP-change case and coverage limitations.
 
+The separate [expired-CA binary probe](expired-ca-verification.md) distinguishes
+`nebula-cert verify`, `nebula -test`, startup and SIGHUP behavior on 1.10.3 and
+1.11.2. It is run inside a disposable VM, outside the ordinary role scenarios;
+its pinned contract can also be checked against saved public JSON results.
+
 `group: ssh-clients` matches one group. `groups: [ssh-clients, admins]` requires **both** ssh-clients **AND** admins; either alone is insufficient. Separate rules are alternatives (OR). A `host: any` selector in a group rule would also match peers outside that group.
 
 The suite tests Linux guests; it does not establish Windows runtime compatibility. It changes no existing instances and does not run on the LXD host itself. Management uses the authenticated LXD connection; test traffic uses Nebula addresses.
