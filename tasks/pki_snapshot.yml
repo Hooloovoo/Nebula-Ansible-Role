@@ -1,0 +1,38 @@
+---
+# Initialize a new transaction's process/file metadata and discard stale facts.
+# In-place callers invoke this before signing and own restoration and cleanup.
+# Other callers defer remote backups until changed files are identified.
+- name: Snapshot PKI state
+  become: true
+  vars:
+    pki_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+    pki_install_names: "{{ pki_names if pki_names is defined else pki_files | map(attribute='item') | list }}"
+  block:
+    - name: Initialize installation state
+      set_fact:
+        pki_changed: []
+        pki_backup: {}
+        pki_process: {}
+        pki_before: {}
+      no_log: true
+
+    - name: Inspect running configuration and process
+      shell: >-
+        test {{ ansible_facts['system'] | quote }} = Linux && test -f {{ (nebula_config_dir ~ '/config.yml') | quote }} &&
+        systemctl is-active {{ pki_service | quote }} &&
+        systemctl show {{ pki_service | quote }} -p MainPID --value
+      register: pki_process
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Inspect original PKI metadata
+      stat:
+        path: "{{ nebula_config_dir }}/{{ item }}"
+      loop: "{{ pki_install_names }}"
+      register: pki_before
+      no_log: true
+
+    - name: Back up live PKI before in-place signing
+      include_tasks: pki_backup.yml
+      when: pki_in_place | default(false) and not ansible_check_mode and pki_process.rc == 0

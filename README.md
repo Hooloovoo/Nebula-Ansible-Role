@@ -64,6 +64,8 @@ On running Linux nodes and separate-CA lighthouses, changed certificate/key/CA f
 
 Nodes that also host the CA are snapshotted before signing, so in-place re-signing is detected. Signing still briefly removes the live certificate/key before replacing them; staged signing is a follow-up. A co-located CA/lighthouse has no automatic re-sign path: manually forcing its re-sign requires a manual reload.
 
+Internally, `pki_snapshot.yml` records the pre-update state, `pki_backup.yml` makes remote backups, `install_pki.yml` applies and validates the update, and `pki_restore.yml` restores a failed transaction. The node's signing block owns the snapshot and cleanup for in-place signing; ordinary installations manage their own transaction. The `pki_in_place` flag describes signing that has already modified live files, rather than simply identifying the CA host. No phase selector is needed.
+
 Without an active service and existing config, files are installed normally. Config changes retain validation and restart handling; unit/binary handling and Windows behavior are unchanged. Check mode performs no snapshot or reload. Existing certificate transport still uses registered slurp results; backups stay remote and key-copy/backup tasks suppress content and diffs. The two validation commands expose their non-secret diagnostics.
 
 # Custom CA Host

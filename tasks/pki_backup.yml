@@ -1,0 +1,23 @@
+---
+# Called by the snapshot before in-place signing, or apply before changed copies.
+# The transaction owner removes pki_backup.path after apply or restoration.
+- name: Create root-only backup directory
+  tempfile:
+    state: directory
+    prefix: nebula-pki-
+  register: pki_new_backup
+  changed_when: false
+  no_log: true
+
+- name: Retain backup directory metadata
+  set_fact:
+    pki_backup: "{{ pki_new_backup }}"
+  no_log: true
+
+- name: Back up original files remotely
+  command:
+    argv: [cp, -p, '--', "{{ nebula_config_dir }}/{{ item.item }}", "{{ pki_backup.path }}/{{ item.item }}"]
+  loop: "{{ pki_before.results }}"
+  changed_when: false
+  no_log: true
+  when: item.stat.exists and (pki_in_place | default(false) or item.item in pki_changed)

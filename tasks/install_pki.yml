@@ -1,45 +1,19 @@
 ---
 # pki_files: existing slurp results (item = basename, content = base64).
-# pki_names: basenames, needed before signing; defaults to pki_files' names.
-# pki_in_place: true uses the pre-signing snapshot instead of desired hashes.
-# pki_phase: apply (default), snapshot, restore. A CA-node caller
-# encloses snapshot -> signing -> apply in rescue/always restore/cleanup.
-# Snapshot output: pki_backup.path is the root-only directory to remove.
-# Service: lighthouse for nebula_lighthouse members, otherwise nebula.
+# pki_names: optional basenames; defaults to pki_files' names.
+# pki_in_place: signing has already modified this node's live PKI files.
+# Compare pre-signing and current hashes, using pki_snapshot.yml before signing.
+# An in-place caller owns rescue (pki_restore.yml) and backup cleanup; otherwise
+# this file owns the snapshot, restoration and cleanup for this installation.
 - name: Manage PKI installation
   become: true
   vars:
-    pki_phase: apply
     pki_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
     pki_install_names: "{{ pki_names if pki_names is defined else pki_files | map(attribute='item') | list }}"
   block:
-    - name: Inspect running configuration and process
-      shell: >-
-        test {{ ansible_facts['system'] | quote }} = Linux && test -f {{ (nebula_config_dir ~ '/config.yml') | quote }} &&
-        systemctl is-active {{ pki_service | quote }} &&
-        systemctl show {{ pki_service | quote }} -p MainPID --value
-      register: pki_process_now
-      changed_when: false
-      failed_when: false
-      check_mode: false
-      when: pki_phase in ['snapshot', 'apply'] and not (pki_in_place | default(false) and pki_phase == 'apply')
-
-    - name: Inspect original PKI metadata
-      stat:
-        path: "{{ nebula_config_dir }}/{{ item }}"
-      loop: "{{ pki_install_names }}"
-      register: pki_before_now
-      no_log: true
-      when: pki_phase in ['snapshot', 'apply'] and not (pki_in_place | default(false) and pki_phase == 'apply')
-
-    - name: Initialize installation state
-      set_fact:
-        pki_changed: []
-        pki_backup: {}
-        pki_process: "{{ pki_process_now }}"
-        pki_before: "{{ pki_before_now }}"
-      no_log: true
-      when: pki_phase == 'snapshot' or (pki_phase == 'apply' and not pki_in_place | default(false))
+    - name: Snapshot PKI before installation
+      include_tasks: pki_snapshot.yml
+      when: not pki_in_place | default(false)
 
     - name: Inspect in-place PKI metadata
       stat:
@@ -47,45 +21,24 @@
       loop: "{{ pki_install_names }}"
       register: pki_after
       no_log: true
-      when: pki_phase == 'apply' and pki_in_place | default(false)
+      when: pki_in_place | default(false)
 
     - name: Identify changed files without copying key content
       set_fact:
         pki_changed: "{{ pki_changed + [item.item] }}"
       loop: "{{ pki_before.results }}"
-      when:
-        - pki_phase == 'apply'
-        - >-
-          (item.stat.checksum | default('')) !=
-          ((pki_after.results | selectattr('item', 'equalto', item.item) | first).stat.checksum | default('')
-          if pki_in_place | default(false) else
-          ((pki_files | selectattr('item', 'equalto', item.item) | first).content | b64decode | hash('sha1')))
+      when: >-
+        (item.stat.checksum | default('')) !=
+        ((pki_after.results | selectattr('item', 'equalto', item.item) | first).stat.checksum | default('')
+        if pki_in_place | default(false) else
+        ((pki_files | selectattr('item', 'equalto', item.item) | first).content | b64decode | hash('sha1')))
       no_log: true
 
     - name: Apply PKI transaction
       block:
-        - name: Create root-only backup directory
-          tempfile:
-            state: directory
-            prefix: nebula-pki-
-          register: pki_new_backup
-          changed_when: false
-          no_log: true
-          when: pki_phase in ['snapshot', 'apply'] and not ansible_check_mode and pki_process.rc == 0 and (pki_phase == 'snapshot' or (pki_changed | length > 0 and not pki_in_place | default(false)))
-
-        - name: Retain backup directory metadata
-          set_fact:
-            pki_backup: "{{ pki_new_backup }}"
-          no_log: true
-          when: pki_new_backup.path is defined
-
-        - name: Back up original files remotely
-          command:
-            argv: [cp, -p, '--', "{{ nebula_config_dir }}/{{ item.item }}", "{{ pki_backup.path }}/{{ item.item }}"]
-          loop: "{{ pki_before.results }}"
-          changed_when: false
-          no_log: true
-          when: pki_phase in ['snapshot', 'apply'] and not ansible_check_mode and pki_backup.path is defined and item.stat.exists and (pki_phase == 'snapshot' or (not pki_in_place | default(false) and item.item in pki_changed))
+        - name: Back up changed PKI before installation
+          include_tasks: pki_backup.yml
+          when: not ansible_check_mode and pki_process.rc == 0 and pki_changed | length > 0 and not pki_in_place | default(false)
 
         - name: Install PKI files as a set
           copy:
@@ -96,10 +49,9 @@
             mode: '0600'
           loop: "{{ pki_files | default([]) }}"
           no_log: true
-          when: pki_phase == 'apply'
 
         - name: Validate and activate changed PKI
-          when: pki_phase == 'apply' and not ansible_check_mode and pki_process.rc == 0 and pki_changed | length > 0
+          when: not ansible_check_mode and pki_process.rc == 0 and pki_changed | length > 0
           block:
             - name: Verify node certificate against the CA bundle
               command: {argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ nebula_config_dir }}/ca.crt", -crt, "{{ nebula_config_dir }}/{{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}.crt"]}
@@ -144,8 +96,7 @@
               delay: 1
       rescue:
         - name: Restore PKI after failed activation
-          include_tasks: install_pki.yml
-          vars: {pki_phase: restore}
+          include_tasks: pki_restore.yml
           when: not pki_in_place | default(false) and pki_backup.path is defined
         - name: Stop after failed PKI activation
           fail:
@@ -159,26 +110,4 @@
           file: {path: "{{ pki_backup.path }}", state: absent}
           changed_when: false
           no_log: true
-          when: pki_phase == 'apply' and not pki_in_place | default(false) and pki_backup.path is defined
-
-    - name: Restore original PKI files and metadata
-      command:
-        argv: [cp, -p, '--', "{{ pki_backup.path }}/{{ item.item }}", "{{ nebula_config_dir }}/{{ item.item }}"]
-      loop: "{{ pki_before.results }}"
-      no_log: true
-      when: pki_phase == 'restore' and not ansible_check_mode and pki_backup.path is defined and item.stat.exists and (pki_in_place | default(false) or item.item in pki_changed)
-
-    - name: Remove files absent before the transaction
-      file:
-        path: "{{ nebula_config_dir }}/{{ item.item }}"
-        state: absent
-      loop: "{{ pki_before.results }}"
-      no_log: true
-      when: pki_phase == 'restore' and not ansible_check_mode and pki_backup.path is defined and not item.stat.exists
-
-    - name: Reload restored PKI and verify process identity
-      shell: |
-        set -eu
-        systemctl reload {{ pki_service | quote }}
-        test "$(systemctl is-active {{ pki_service | quote }}; systemctl show {{ pki_service | quote }} -p MainPID --value)" = {{ pki_process.stdout | quote }}
-      when: pki_phase == 'restore' and not ansible_check_mode and pki_backup.path is defined
+          when: not pki_in_place | default(false) and pki_backup.path is defined

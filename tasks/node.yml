@@ -5,8 +5,7 @@
     pki_files: "{{ lighthouse_files.results }}"
   block:
     - name: Snapshot live PKI before signing on this node
-      include_tasks: install_pki.yml
-      vars: {pki_phase: snapshot}
+      include_tasks: pki_snapshot.yml
       when: pki_in_place
     - name: Sign certificate on lighthouse and fetch cert/key/CA
       include_tasks: sign.yml
@@ -19,8 +18,7 @@
       include_tasks: install_pki.yml
   rescue:
     - name: Restore live PKI after signing or activation failure
-      include_tasks: install_pki.yml
-      vars: {pki_phase: restore}
+      include_tasks: pki_restore.yml
       when: pki_in_place and pki_backup.path is defined
     - name: Stop after failed node PKI update
       fail:
@@ -78,4 +76,3 @@
     minute: "{{ nebula_check_cron_minute | default('*/5') }}"
     job: "{{ nebula_config_dir }}/nebula-check.sh"
   when: nebula_install_check_cron|bool
-

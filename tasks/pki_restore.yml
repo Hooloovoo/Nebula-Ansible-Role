@@ -1,0 +1,29 @@
+---
+# Restore the current transaction's snapshot, without creating another snapshot.
+# The caller owns reporting the original failure and cleaning up pki_backup.path.
+- name: Restore PKI snapshot
+  become: true
+  vars:
+    pki_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+  when: not ansible_check_mode and pki_backup.path is defined
+  block:
+    - name: Restore original PKI files and metadata
+      command:
+        argv: [cp, -p, '--', "{{ pki_backup.path }}/{{ item.item }}", "{{ nebula_config_dir }}/{{ item.item }}"]
+      loop: "{{ pki_before.results }}"
+      no_log: true
+      when: item.stat.exists and (pki_in_place | default(false) or item.item in pki_changed)
+
+    - name: Remove files absent before the transaction
+      file:
+        path: "{{ nebula_config_dir }}/{{ item.item }}"
+        state: absent
+      loop: "{{ pki_before.results }}"
+      no_log: true
+      when: not item.stat.exists
+
+    - name: Reload restored PKI and verify process identity
+      shell: |
+        set -eu
+        systemctl reload {{ pki_service | quote }}
+        test "$(systemctl is-active {{ pki_service | quote }}; systemctl show {{ pki_service | quote }} -p MainPID --value)" = {{ pki_process.stdout | quote }}
