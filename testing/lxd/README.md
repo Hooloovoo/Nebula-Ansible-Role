@@ -79,12 +79,16 @@ in-place re-signing, PID and fingerprint evidence, persistent TCP streams,
 fresh handshakes forced by restarting only the peer after continuity checks,
 no-op/check/diff runs, config-only and combined changes, invalid-PKI rollback,
 interrupted local signing, byte-identical restoration and temporary-file cleanup.
-The separate opt-in `safe-apply-ip-change` acceptance scenario requires either
-a successful renumbering with the new tunnel address and a fresh peer handshake,
-or an explicit failure preserving the original files, process and connectivity.
-It records addresses, certificate JSON and journal evidence before assertions.
-This prevents a successful play from hiding a divergence between the certificate
-and the running tunnel. It is included in `all`, but excluded from `auto`.
+The separate opt-in `safe-apply-ip-change` acceptance scenario requires successful
+renumbering with a new process, exactly the desired tunnel address and a fresh
+peer handshake. Safe rejection is not counted as successful renumbering. It
+tests address and prefix changes, no-op/check mode, group-only reloads after a
+renumbering, and repair of files/runtime divergence left by an older failed
+reload. Node, in-place CA-node and separate-CA lighthouse paths also exercise
+an injected startup failure: the play must fail, restore byte-identical PKI,
+restart with the original address, retain connectivity and remove backups.
+The scenario records addresses, certificate JSON and journal evidence before
+assertions. It is included in `all`, but excluded from `auto`.
 Wrong-CA cases use a matching leaf/key signed by a separate CA while retaining
 the deployed trust bundle. They prove `nebula -test` alone accepts that input,
 then require CA verification to reject it, expose the cause, restore the old
@@ -112,14 +116,16 @@ python testing/lxd/run.py --remote myremote --project my-test-project \
   --scenario safe-apply --nebula-version 1.8.0 --nebula-version 1.9.5 \
   --nebula-version 1.11.2 --nebula-version 1.12.0
 
-# Separate IP-change acceptance test; currently exposes a known role defect.
+# Separate IP-change/restart acceptance test (requires the network-change fix).
 python testing/lxd/run.py --remote myremote --project my-test-project \
   --role-path /path/to/safe-pki-test-stack --scenario safe-apply-ip-change \
-  --nebula-version 1.11.2
+  --nebula-version 1.8.0 --nebula-version 1.11.2
 ```
 
-The baseline must predate safe-PKI application; both checkouts should include
-only the prerequisite fixes needed for the selected Nebula releases. Failure
+Choose the baseline to represent the existing deployment: a pre-safe-PKI role
+for initial adoption, or the previous safe-PKI revision for an upgrade test.
+Both checkouts should include only the prerequisite fixes needed for the
+selected Nebula releases. Failure
 injection stays in the test playbook and disposable VMs, with no production
 test hooks. `safe-apply` requires certificate groups, a configurable CA host,
 and `tasks/install_pki.yml`.
@@ -144,7 +150,7 @@ this runner's default or `all` scenarios. Add the final rotation acceptance
 scenario when its documented workflow can be exercised literally.
 
 See [verification results](verification.md) for the tested revisions, completed
-runs, known failing IP-change case and coverage limitations.
+runs, historical IP-change failure and its fix, and coverage limitations.
 
 The separate [expired-CA binary probe](expired-ca-verification.md) distinguishes
 `nebula-cert verify`, `nebula -test`, startup and SIGHUP behavior on 1.10.3 and

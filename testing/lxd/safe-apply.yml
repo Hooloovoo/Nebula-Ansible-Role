@@ -37,8 +37,17 @@
         - file: {path: "{{ probe_dir.path }}", state: absent}
           no_log: true
           when: probe_dir.path is defined
+    - name: Stage a rejected-reload fixture without activating it
+      copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "/opt/nebula/{{ item.item }}"
+        mode: '0600'
+      loop: "{{ desired.results }}"
+      no_log: true
+      when: stage_only | default(false)
     - include_role:
         name: "{{ tested_role }}"
         tasks_from: install_pki
       vars:
         pki_files: "{{ [desired.results[-1]] if ca_only | default(false) else desired.results }}"
+      when: not stage_only | default(false)

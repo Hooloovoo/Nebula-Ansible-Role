@@ -38,7 +38,8 @@ the revisions and environments recorded there, not automatically to later code.
 | Safe-PKI core | Role `a577b2a` plus PR #25's lookups passed 137 assertions each on 1.8.0 and 1.11.2, including baseline upgrades, real systemd/journald, persistent TCP streams, fresh peer handshakes and rollback. |
 | Explicit PKI task files | Refactor `5570cc9` passed the same 137 assertions on both releases, including zero-change upgrades from `a577b2a`; snapshot, backup and restore no longer use `pki_phase`. |
 | Review hypotheses | Those runs demonstrate working snapshot/restore paths and fingerprint evidence with default text logging. They do not support the hypothesis that snapshot/restore always recurse as `apply`. |
-| **IP-change blocker** | On both 1.8.0 and 1.11.2, the safe-PKI role reports success after certificate renumbering while `neb0` retains the old address and fresh traffic to the new address fails. On 1.11.2 the journal says `Networks in new cert was different from old`. |
+| Historical IP-change blocker | The reload-only revisions reported success while `neb0` retained the old address on 1.8.0 and 1.11.2. This is fixed by `8a2c46b`; retain the original failure evidence for comparison. |
+| Network-change activation | `8a2c46b` passed 77 IP/restart assertions and 137 existing safe-PKI assertions on each of 1.8.0 and 1.11.2. Includes prefix changes, runtime-drift repair, startup-failure rollback and zero-change upgrades from `5570cc9`. |
 | Firewall evidence | The earlier 1.11.2 run timed out after 28 passing checks; it is not a complete firewall pass. |
 
 The safe-PKI tests verify mismatched-key and wrong-CA rejection, byte-identical
@@ -46,7 +47,7 @@ restoration, process preservation and backup cleanup, including in-place
 CA-node signing failures. They also show why `nebula -test` alone is insufficient:
 a matching certificate/key from an untrusted CA can pass configuration validation.
 
-**Not established by those runs:** full CA rotation; successful IP renumbering;
+**Not established by those runs:** full CA rotation;
 recovery after controller disconnection; watchdog/restart races; stopped-service
 signing recovery; alternate logging settings; fresh/unprovisioned check mode;
 mobile-app trust-bundle behavior. The safe-PKI fixture disables the connectivity
@@ -64,7 +65,7 @@ participant, and do not introduce a certificate-format upgrade incidentally.
 |---|---|
 | `feature/cert-json-compat`, `a0527eb` | Submitted PR #25; use the branch rather than the older four-case patch file. |
 | `feature/lxd-regression-tests`, `27f9306` | Updated base plus focused JSON and safe-PKI coverage (`d2279ae`, `27f9306`). |
-| `feature/safe-pki-apply`, locally `5570cc9` | Narrower first-stage implementation, trust verification and tested explicit-task refactor; **IP-change defect must be resolved before treating it as merge-ready**. |
+| `feature/safe-pki-apply`, locally `8a2c46b` | First-stage safe-PKI implementation, explicit-task refactor and tested IP-change/restart fix. Renumbering requires independent management; autonomous rollback after controller loss remains separate work. |
 | `testing/lxd-rotation-experiments`, `8a17e94` | Preserved experimental scenarios and helpers; source material for future PR-specific tests. |
 | `feature/lxd-ca-rotation-tests`, `d99fe89` | Earlier modular rotation suite; compare with experiments instead of importing both wholesale. |
 | `feature/ca-rotation` and personal infrastructure branches | Reference implementations and topology examples, not a required architecture or an approved emergency fallback. |
@@ -73,7 +74,8 @@ Keep the general LXD suite aligned with submitted and upcoming role PRs. Add
 each independently useful behavior as its own scenario/commit. `auto` currently
 runs ordinary certificate, firewall and CA-host tests; upgrade and safe-PKI
 acceptance scenarios are opt-in. `all` includes `safe-apply-ip-change`, which
-currently fails against the tested safe-PKI role. Keep that failure visible.
+now requires successful renumbering and startup-failure recovery. Older
+reload-only roles fail it; safe rejection is not a substitute for activation.
 
 The runner at `27f9306` defaults to 1.8.0 and 1.9.5. Keep its README and CLI
 consistent when deciding future defaults; newer-version and acceptance matrices
@@ -208,10 +210,10 @@ on the same host need not use in-place mode.
 
 The file split passed the existing reload/rollback suite (137 assertions each
 on 1.8.0 and 1.11.2), including a zero-change upgrade from the pre-refactor role.
-It does not fix IP renumbering, introduce restart classification or provide
-autonomous rollback. Keep the IP-change defect recorded separately until its
-behavior-changing fix is implemented; see the verification record for commands
-and test-stack prerequisites.
+The follow-up `8a2c46b` adds network-based restart classification and fixes IP
+renumbering, with a further 77 dedicated assertions per release. It does not
+provide autonomous rollback after controller loss. See the verification record
+for the original defect, successful fix, commands and test-stack prerequisites.
 
 ## 5. Proposed PR sequence
 
@@ -223,7 +225,7 @@ boundaries. P0 evolves alongside each PR; tests are not postponed to the end.
 | P0 | General LXD regression foundation and scenario ownership | Already integrated; maintain exact revision/results records and visible negative cases. |
 | P1 | Certificate JSON compatibility | Submitted PR #25. Only two IP alternatives are needed: `details.ips[0]` through 1.9.x, `[0].details.networks[0]` from 1.10.0. Keep the object/array groups lookup. |
 | P2 | Explicit certificate subject independent of inventory/file name, if needed | Preserve existing subjects on reissue; no blanket name-drift regeneration. Establish this before re-signing deployments whose subject names differ from inventory names. |
-| P3a | Safe PKI transaction with reload/restart classification | Extend the current safe-PKI work to fix IP renumbering and match §4. Includes trust verification, readable failures, recovery and no-op behavior. Requires P1 when testing newer releases. |
+| P3a | Safe PKI transaction with reload/restart classification | Network classification and local restart/recovery implemented in `8a2c46b`. Continue review against §4 without claiming connection-independent recovery. Requires P1 when testing newer releases. |
 | P3b | Same guarantees for CA-host-as-node signing | Already partly implemented/tested in the current branch; retain or split only if each proposed PR is safe alone. Snapshot before mutation; later staged signing removes the delete-before-create window. |
 | P3c | Connection-independent confirmation/rollback | Develop with P3a's restart path where needed. Reusable for firewall changes and rotation. Must precede claims of safe restart over overlay SSH; do not defer a required recovery mechanism merely to keep P3a small. |
 | P4 | Shared signing/reconciliation for node and lighthouse | Lighthouse IP/groups and later issuer drift need an ordinary-role path. Preserve default rendering/identities; explicitly document newly detected lighthouse drift. Depends on safe activation and subject handling where needed. |
@@ -238,15 +240,14 @@ boundaries. P0 evolves alongside each PR; tests are not postponed to the end.
   changes. Preserve its ordinary/in-place caller, check-mode, restoration and
   cleanup coverage; add targeted same-play repeated-include and recovery-failure
   tests where the next transaction changes introduce new state/lifetime risks.
-- Make the current `safe-apply-ip-change` acceptance test pass by actually
-  activating the new address with restart, not by ignoring the case or returning
-  success after a rejected reload. Until implemented, explicit rejection with
-  restoration is safer, but does not complete the planned renumbering feature.
-- Strengthen the test: the current failure branch allows safe rejection; final
-  restart support must explicitly require successful renumbering, expected
-  activation and a fresh handshake at the new address.
+- The IP-change fix and strict acceptance test are complete for the tested
+  independent-management cases (`8a2c46b`): successful address/prefix changes,
+  new PID and fresh handshake, no-op/check mode, stale-runtime repair and
+  injected restart-failure recovery for nodes, CA-nodes and lighthouses.
+- Preserve that strict test contract. Do not count rejection as successful
+  renumbering or weaken actual tunnel/handshake assertions to file-only checks.
 - Keep the passing reload, wrong-CA, mismatched-key, interrupted signing and
-  baseline-upgrade coverage. Add restart-failure recovery, management interruption,
+  baseline-upgrade and restart-failure coverage. Add management interruption,
   watchdog coordination and fresh check-mode cases before claiming those paths.
 - Distinguish first deployment/inactive-service handling from recovery of an
   existing running host; avoid promising protection never implemented or tested.
@@ -455,9 +456,10 @@ literally, including preservation of signer and leaf certificate/key hashes.
 2. Review the completed explicit-task refactor (`5570cc9`, §4.5) and its passing
    syntax, baseline-upgrade and LXD reload/rollback evidence before building
    activation-classification changes on top.
-3. Update the safe-PKI implementation brief to replace "reload, never restart"
-   with §4's classification and operation-specific recovery requirements. Fix
-   the confirmed IP-change defect and rerun the dedicated acceptance test.
+3. Review `8a2c46b` and the strengthened IP-change evidence. Keep its
+   independent-management requirement explicit. Update any remaining
+   "reload, never restart" briefs to reflect classification, runtime-address
+   verification and operation-specific recovery.
 4. Decide the smallest safe split for P3a/P3b/P3c; preserve already tested CA-node
    protections. Review recovery over overlay SSH before enabling restart there.
 5. Complete the targeted matrix and baseline/failure cases for the proposed

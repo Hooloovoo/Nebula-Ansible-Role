@@ -43,7 +43,7 @@ separate completed run supersedes that partial result. The 1.8.0 completed run
 predates addition of the separate IP-change scenario. These integration runs
 did not repeat the safe-PKI matrix on 1.9.5 or 1.12.0.
 
-### Known failure: IP renumbering
+### Historical failure: IP renumbering (fixed by `8a2c46b`)
 
 The separate `safe-apply-ip-change` scenario fails on **both 1.8.0 and 1.11.2**
 against the tested safe-PKI role. Changing the node from `10.193.0.2/24` to
@@ -56,11 +56,11 @@ interface still has the old one.
 
 Run IDs: `nebtest-e9981a2555` (1.8.0), `nebtest-1bd8c97f2b` (1.11.2).
 
-This is a failing acceptance test, not an expected-failure pass. The role needs
-either a working renumbering path or explicit rejection with restoration. A
-successful reload log/fingerprint alone does not establish working renumbering.
-`all` includes this test and currently exposes the defect; `auto` excludes the
-opt-in safe-PKI and upgrade scenarios.
+This was a failing acceptance test, not an expected-failure pass. The original
+reload-only revisions remain affected; `8a2c46b` fixes the issue as described
+below. The strengthened scenario now requires successful renumbering and does
+not accept safe rejection as a passing outcome. `all` includes this test;
+`auto` excludes the opt-in safe-PKI and upgrade scenarios.
 
 ## Interpretation of review concerns
 
@@ -118,3 +118,84 @@ documented above. All VMs from these runs were removed.
 Logs live under `/tmp/nebula-lxd-tests/<run-id>/` while the temporary directory
 is retained; run IDs are identifiers, not a promise of permanent artifact
 availability. Re-run the README commands for current evidence.
+
+## Network-change restart fix
+
+Role revision **`8a2c46b`** classifies PKI activation using the certificate's
+normalized networks/unsafe networks and the current tunnel addresses. Address
+or prefix changes restart Nebula; compatible changes still use SIGHUP. It also
+repairs the older silent-failure state where the desired certificate files are
+already installed but the live tunnel still has the previous address.
+
+After activation the role verifies the service process and enabled tunnel
+addresses. Recovery distinguishes validation failures (restore and reload) from
+attempted restarts (restore and restart). If tunnel inspection fails, snapshot
+processing stops before installing replacement PKI rather than guessing that
+the addresses are missing. Local address inspection uses iproute2's `ip -json`.
+
+### Completed LXD runs
+
+| Scenario | Version | Assertions | Run ID |
+|---|---|---|---|
+| `safe-apply-ip-change` | 1.8.0 | **77 passed** | `nebtest-ca9070bb34` |
+| `safe-apply-ip-change` | 1.11.2 | **77 passed** | `nebtest-6623d07ebf` |
+| `safe-apply` with baseline upgrade | 1.8.0 | **137 passed** | `nebtest-6825bd1c71` |
+| `safe-apply` with baseline upgrade | 1.11.2 | **137 passed** | `nebtest-3db2c0ed15` |
+
+The baseline for these upgrades was `5570cc9`. Tested and baseline throwaway
+checkouts both included only PR #25's IP/group JSON lookup changes as an
+additional prerequisite. Healthy baseline upgrades reported zero changes,
+preserved PKI hashes and process IDs, and caused no unnecessary activation.
+The test runner was `33a0d94` plus the accompanying IP-test changes. The
+controller/guest setup was as above, with pipelining enabled.
+
+The 77-assertion scenario covers:
+
+- Node address changes and prefix-only changes in both directions (/24 ↔ /25),
+  with new processes, exact interface networks, matching certificate fields
+  and fresh peer handshakes.
+- Zero-change repeat runs, non-mutating proposed-IP check/diff mode and
+  group-only reissue that preserves the PID after renumbering.
+- An older failed-reload fixture: stage the desired files without activation,
+  then require the normal role to repair runtime drift without re-signing.
+- In-place CA-node renumbering and installation of a changed-network lighthouse
+  certificate through the shared installer. This does not add automatic
+  lighthouse re-signing to the regular role.
+- Real startup failure injection on node, CA-node and lighthouse. A test-only
+  binary wrapper fails exactly one `-config` startup, while `-test` remains
+  valid. The play must report an activation failure, restore the original PKI
+  hashes, start with the original address, regain fresh connectivity and remove
+  transaction backups. The recovered process is new, not the original PID.
+
+Example commands (using the recorded controller setup):
+
+```sh
+export PATH="/snap/lxd/current/bin:/tmp/opencode/regression-venv/bin:$PATH"
+export LXD_CONF="$HOME/snap/lxd/common/config"
+export ANSIBLE_COLLECTIONS_PATH=/tmp/opencode/collections ANSIBLE_PIPELINING=true
+python testing/lxd/run.py --remote mythie --project opencode-temp \
+  --role-path /tmp/opencode/pki-network-test --scenario safe-apply-ip-change \
+  --nebula-version 1.8.0 --nebula-version 1.11.2 --cpus 1
+python testing/lxd/run.py --remote mythie --project opencode-temp \
+  --role-path /tmp/opencode/pki-network-test \
+  --baseline-role-path /tmp/opencode/pki-network-baseline --scenario safe-apply \
+  --nebula-version 1.8.0 --nebula-version 1.11.2 --cpus 1
+```
+
+Earlier incomplete IP runs exposed fixture issues, not passing evidence: a
+restarted lighthouse needed node-initiated registration before peer traffic;
+the separate CA had to be provisioned before adding it as a node; and the
+CA-node's new address had to be a host variable rather than a global extra
+variable that assigned duplicate addresses. One run also stopped on an LXD TLS
+verification error before activation. The completed runs above supersede those
+partial attempts; none was counted as a pass.
+
+YAML parsing, Python syntax and Ansible syntax checks passed. All test VMs were
+removed. Tests on other releases, IPv6, unsafe-network changes, disabled/custom
+tunnels, watchdog races and loss of the controller connection were not added
+to this run. The pre-existing broader coverage limitations still apply.
+
+Renumbering intentionally interrupts existing overlay connections. These tests
+use the independent LXD management transport; they do not establish autonomous
+rollback after losing a Nebula SSH management session. Use an independent
+management path for renumbering until that separate recovery feature is tested.

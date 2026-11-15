@@ -568,29 +568,179 @@ while True:
             self.guest('client', 'rm', '-rf', '--', rogue)
 
     def safe_apply_ip_change(self):
-        before = self.ca_hashes('server', 'server.crt', 'server.key', 'ca.crt')
-        old_pid = self.guest('server', 'systemctl', 'show', 'nebula', '-p', 'MainPID', '--value').stdout.strip()
+        def service(host):
+            return 'lighthouse' if host == 'lh' else 'nebula'
+
+        def pid(host):
+            self.guest(host, 'systemctl', 'is-active', service(host))
+            value = self.guest(host, 'systemctl', 'show', service(host), '-p', 'MainPID', '--value').stdout.strip()
+            assert int(value) > 0
+            return value
+
+        def hashes(host, name):
+            return self.ca_hashes(host, name + '.crt', name + '.key', 'ca.crt')
+
+        def addresses(host):
+            result = self.guest(host, 'ip', '-json', 'address', 'show', 'dev', 'neb0')
+            return sorted(a['local'] + '/' + str(a['prefixlen'])
+                          for link in json.loads(result.stdout) for a in link['addr_info'] if a['family'] == 'inet')
+
+        def run(inventory, limit, playbook='reconcile.yml', extra=()):
+            start = self.log.stat().st_size
+            status = self.command(['ansible-playbook', '-i', str(inventory), str(HERE / playbook),
+                                   '--limit', limit, *extra], check=False, timeout=1200)
+            with self.log.open() as log:
+                log.seek(start)
+                return status, log.read()
+
+        def no_backups(host):
+            self.check(host + ' IP update leaves no backups', self.guest(host, 'python3', '-c',
+                       'import glob; assert not glob.glob("/tmp/nebula-pki-*")').returncode == 0)
+
+        def activated(host, name, network, old_pid):
+            # Collect actual certificate/interface/journal evidence before assertions.
+            actual = addresses(host)
+            printed = json.loads(self.guest(host, '/opt/nebula/nebula-cert', 'print', '-json',
+                                           '-path', '/opt/nebula/' + name + '.crt').stdout)
+            details = (printed[0] if isinstance(printed, list) else printed)['details']
+            self.guest(host, 'journalctl', '-u', service(host), '-n', '80', '--no-pager', '-o', 'cat')
+            self.check(host + ' IP update has a new PID', old_pid != pid(host))
+            self.check(host + ' IP update has exactly the desired tunnel network', actual == [network])
+            self.check(host + ' installed certificate has the desired network',
+                       (details.get('networks') or details.get('ips')) == [network])
+            no_backups(host)
+
+        def fresh_peer(host, peer, address):
+            # Restart only the peer after checking the target's activation PID.
+            old_pid = pid(host)
+            self.guest(peer, 'systemctl', 'restart', service(peer))
+            if peer == 'lh':
+                # A fresh lighthouse has no registration for the renumbered node.
+                # Initiate via the node's static lighthouse endpoint first, rather
+                # than waiting for its 60-second registration interval.
+                self.guest(host, 'ping', '-c', '3', '-W', '5', '10.193.0.1')
+            self.check(host + ' new address permits a fresh peer handshake',
+                       self.guest(peer, 'ping', '-c', '5', '-W', '5', address, check=False).returncode == 0)
+            self.check(host + ' fresh handshake retains the activated PID', old_pid == pid(host))
+
+        def fail_next_start(host, operation):
+            # Only a test wrapper fails one real startup, not -test or -version.
+            binary = '/opt/nebula/nebula'
+            self.guest(host, 'mv', binary, binary + '.test-real')
+            wrapper = ('#!/bin/sh\nif [ "$1" = "-config" ] && [ -f /run/nebula-fail-next-start ]; then\n'
+                       '  rm /run/nebula-fail-next-start\n  exit 42\nfi\n'
+                       'exec /opt/nebula/nebula.test-real "$@"\n')
+            try:
+                self.guest(host, 'python3', '-c',
+                           'from pathlib import Path; import sys; p=Path(sys.argv[1]); '
+                           'p.write_text(sys.argv[2]); p.chmod(0o700); Path("/run/nebula-fail-next-start").touch()',
+                           binary, wrapper)
+                status, output = operation()
+                self.check(host + ' injected restart fails the play', status != 0)
+                self.check(host + ' failure identifies activation', 'Activate PKI using the selected operation' in output)
+                self.check(host + ' restart injection was exercised',
+                           self.guest(host, 'test', '!', '-e', '/run/nebula-fail-next-start', check=False).returncode == 0)
+            finally:
+                self.guest(host, 'mv', binary + '.test-real', binary)
+                self.guest(host, 'rm', '-f', '/run/nebula-fail-next-start')
+
+        # Ordinary node: address, prefix, no-op, check mode and reload-only groups.
+        old_pid = pid('server')
         self.node_ips['server'] = '10.193.0.4'
-        status = self.command(['ansible-playbook', '-i', str(self.inventory()),
-                               str(HERE / 'reconcile.yml'), '--limit', 'server'], check=False, timeout=1200)
-        # Gather evidence before assertions, including fresh peer traffic.
-        addresses = self.guest('server', 'ip', '-4', '-o', 'addr', 'show', 'dev', 'neb0').stdout
-        self.guest('server', '/opt/nebula/nebula-cert', 'print', '-json', '-path', '/opt/nebula/server.crt')
-        self.guest('server', 'journalctl', '-u', 'nebula', '-n', '80', '--no-pager', '-o', 'cat')
-        self.guest('lh', 'systemctl', 'restart', 'lighthouse')
-        address = '10.193.0.4' if status == 0 else '10.193.0.2'
-        connected = self.guest('lh', 'ping', '-c', '3', '-W', '5', address, check=False).returncode == 0
-        if status == 0:
-            self.check('successful IP change updates the tunnel address', '10.193.0.4/24' in addresses)
-            self.check('successful IP change permits a fresh handshake at the new address', connected)
-        else:
-            self.check('rejected IP change restores original files',
-                       before == self.ca_hashes('server', 'server.crt', 'server.key', 'ca.crt'))
-            self.check('rejected IP change preserves the process and address',
-                       old_pid == self.guest('server', 'systemctl', 'show', 'nebula', '-p', 'MainPID', '--value').stdout.strip()
-                       and '10.193.0.2/24' in addresses)
-            self.check('rejected IP change retains connectivity at the original address', connected)
-        self.guest('server', 'python3', '-c', 'import glob; assert not glob.glob("/tmp/nebula-pki-*")')
+        status, _ = run(self.inventory(), 'server')
+        self.check('node IP renumbering succeeds', status == 0)
+        activated('server', 'server', '10.193.0.4/24', old_pid)
+        fresh_peer('server', 'lh', '10.193.0.4')
+        for prefix in (25, 24):
+            inventory = self.inventory()
+            data = json.loads(inventory.read_text())
+            data['all']['vars']['nebula_network_cidr'] = prefix
+            inventory.write_text(json.dumps(data))
+            old_pid = pid('server')
+            status, _ = run(inventory, 'server')
+            self.check('prefix-only update succeeds ' + str(prefix), status == 0)
+            activated('server', 'server', '10.193.0.4/' + str(prefix), old_pid)
+            fresh_peer('server', 'lh', '10.193.0.4')
+        before, old_pid = hashes('server', 'server'), pid('server')
+        status, output = run(self.inventory(), 'server')
+        counts = re.findall(r'changed=(\d+)', output)
+        self.check('renumbered node repeat reports zero changes', status == 0 and bool(counts) and all(int(n) == 0 for n in counts))
+        self.check('renumbered node repeat preserves hashes and PID', before == hashes('server', 'server') and old_pid == pid('server'))
+        self.node_ips['server'] = '10.193.0.5'
+        status, _ = run(self.inventory(), 'server', extra=['--check', '--diff'])
+        self.check('proposed IP check mode succeeds without mutation', status == 0 and
+                   before == hashes('server', 'server') and old_pid == pid('server') and addresses('server') == ['10.193.0.4/24'])
+        self.node_ips['server'] = '10.193.0.4'
+        self.groups['server'].append('after-renumbering')
+        status, _ = run(self.inventory(), 'server')
+        self.check('group-only change after renumbering reloads without restarting', status == 0 and old_pid == pid('server'))
+        before, old_pid = hashes('server', 'server'), pid('server')
+        self.node_ips['server'] = '10.193.0.5'
+        fail_next_start('server', lambda: run(self.inventory(), 'server'))
+        self.check('node restart rollback restores original hashes', before == hashes('server', 'server'))
+        activated('server', 'server', '10.193.0.4/24', old_pid)
+        fresh_peer('server', 'lh', '10.193.0.4')
+
+        # Reproduce the old silent failure: desired files already installed, old
+        # address still active. A rerun must repair runtime drift without re-signing.
+        status, _ = run(self.inventory(), 'server', 'safe-apply.yml',
+                        ['-e', json.dumps({'certificate_name': 'server', 'stage_only': True})])
+        self.check('legacy drift fixture stages new files without activation', status == 0 and addresses('server') == ['10.193.0.4/24'])
+        before, old_pid = hashes('server', 'server'), pid('server')
+        status, _ = run(self.inventory(), 'server')
+        self.check('legacy rejected-reload runtime drift is repaired without re-signing', status == 0 and before == hashes('server', 'server'))
+        activated('server', 'server', '10.193.0.5/24', old_pid)
+        fresh_peer('server', 'lh', '10.193.0.5')
+
+        # In-place CA-node and separate-CA lighthouse paths share the classifier.
+        self.cleanup()
+        self.provision()
+        self.ca_deploy(separate=True)
+        self.ca_deploy(separate=True, ca_node=True, limit='cah')
+
+        def run_ca_node(address):
+            inventory = self.ca_inventory(separate=True, ca_node=True)
+            data = json.loads(inventory.read_text())
+            data['all']['children']['ca_hosts']['hosts']['cah']['nebula_internal_ip_addr'] = address
+            inventory.write_text(json.dumps(data))
+            return run(inventory, 'cah', 'ca-deploy.yml')
+
+        old_pid = pid('client')
+        status, _ = run_ca_node('10.193.0.4')
+        self.check('CA-node in-place renumbering succeeds', status == 0)
+        activated('client', 'cah', '10.193.0.4/24', old_pid)
+        fresh_peer('client', 'lh', '10.193.0.4')
+        before, old_pid = hashes('client', 'cah'), pid('client')
+        fail_next_start('client', lambda: run_ca_node('10.193.0.5'))
+        self.check('CA-node restart rollback restores its pre-signing hashes', before == hashes('client', 'cah'))
+        activated('client', 'cah', '10.193.0.4/24', old_pid)
+        fresh_peer('client', 'lh', '10.193.0.4')
+
+        fixture = self.guest('client', 'python3', '-c',
+                             'import tempfile; print(tempfile.mkdtemp(prefix="ip-change-", dir="/opt/nebula"))').stdout.strip()
+        try:
+            for address, should_fail in [('10.193.0.6', False), ('10.193.0.7', True)]:
+                for suffix in ('.crt', '.key'):
+                    self.guest('client', 'rm', '-f', fixture + '/lh' + suffix)
+                self.guest('client', '/opt/nebula/nebula-cert', 'sign', '-name', 'lh', '-ip', address + '/24',
+                           '-ca-crt', '/opt/nebula/ca.crt', '-ca-key', '/opt/nebula/ca.key',
+                           '-out-crt', fixture + '/lh.crt', '-out-key', fixture + '/lh.key')
+                inventory = self.ca_inventory(separate=True, ca_node=True)
+                extra = ['-e', json.dumps({'certificate_name': 'lh', 'test_leaf_dir': fixture})]
+                before, old_pid = hashes('lh', 'lh'), pid('lh')
+                if should_fail:
+                    fail_next_start('lh', lambda: run(inventory, 'lh', 'safe-apply.yml', extra))
+                    self.check('lighthouse restart rollback restores original hashes', before == hashes('lh', 'lh'))
+                else:
+                    status, _ = run(inventory, 'lh', 'safe-apply.yml', extra)
+                    self.check('lighthouse network update succeeds', status == 0)
+                    self.guest('server', 'python3', '-c',
+                               'from pathlib import Path; p=Path("/opt/nebula/config.yml"); '
+                               'p.write_text(p.read_text().replace("10.193.0.1", "10.193.0.6"))')
+                activated('lh', 'lh', '10.193.0.6/24', old_pid)
+                fresh_peer('lh', 'server', '10.193.0.6')
+        finally:
+            self.guest('client', 'rm', '-rf', '--', fixture)
 
     def config(self, host):
         return yaml.safe_load(self.guest(host, 'cat', '/opt/nebula/config.yml').stdout)
