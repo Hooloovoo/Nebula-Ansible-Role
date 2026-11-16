@@ -1,5 +1,28 @@
 # Regression integration verification
 
+## Split-selector preservation rehearsal
+
+The new `--pki-mode` selectors were rehearsed against the preserved integrated
+role `8a2c46b` on Nebula 1.8.0, before extracting separate A/B candidates:
+
+| Mode | Reload/rollback | IP/restart | Run IDs |
+|---|---|---|---|
+| combined | 134 + 3 baseline checks | 77 | `nebtest-01b965efb4`, `nebtest-957e4617a0` |
+| install | 95 | 60 | `nebtest-b67f79c197`, `nebtest-29e38580e8` |
+| in-place | 39 + 3 baseline checks | 17 | `nebtest-91c9c8ae8c`, `nebtest-6cf3526e1a` |
+
+All completed. The coverage comparator proved that A+B retains all **211**
+combined acceptance assertions, including repeated helper assertions; baseline
+checks are excluded from that arithmetic and passed in their respective runs.
+Eight fast selection/coverage tests also passed. A source comparison retained
+all 108 original assertion call sites from `8312726`.
+
+These results establish preservation and mode isolation on the integrated code,
+not correctness of unbuilt extracted PRs. Their actual heads must still be run
+fresh, against appropriate baselines, and together. Role code was unchanged in
+this rehearsal. The baseline for combined/in-place upgrade checks was `5570cc9`.
+All created VMs were removed.
+
 These results describe integration of the focused LXD tests, rather than a
 blanket approval of every behavior in the role. Guests were disposable Ubuntu
 24.04 LXD VMs, managed with `community.general.lxd` on remote `mythie`, project

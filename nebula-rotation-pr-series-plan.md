@@ -1,5 +1,33 @@
 # Plan: CA rotation built from improvements to the normal role
 
+## Active implementation ledger
+
+The integrated safe-PKI implementation is preserved at `8a2c46b`; the original
+complete regression suite is preserved at `8312726`. Extracted PRs must retain
+their combined behavior, including network-change restart/recovery. Do not
+rewrite those source branches while preparing review branches.
+
+The runner accepts `--scenario safe-pki --pki-mode install|in-place|combined`.
+This runs both existing PKI scenarios. Existing scenario commands default to
+combined. `--list-tests` previews runs without provisioning. Manifests record
+scope/completion; `assertions.json` records every named assertion. The
+`compare-pki-coverage.py` tool checks that install plus in-place equals combined,
+excluding topology-specific baseline checks. The 1.8.0 selector rehearsal
+retained all **211 acceptance assertions** (95+60 install, 39+17 in-place), with
+baseline checks passing separately. This tests the integrated role's selectors,
+not the as-yet-unbuilt extracted PR heads.
+
+The role README describes end-user behavior, backup/rollback conditions and
+operational limits. Test matrices, dependencies, reviewer rationale and remaining
+evidence belong in draft PR descriptions and test evidence, not the role README.
+
+Implementation order: A/B; subject handling; explicit signing inputs; staged
+key-preserving signing; lighthouse reconciliation; issuer drift; independent
+confirmation; classified configuration reload; fleet rotation. Each gets a
+branch, commit, red/green tests and draft PR description. The final stack must
+pass rotation over Nebula SSH and on 1.12.0 with PR #25. Branch heads/results
+will be indexed here as produced; proposed behavior is not verified in advance.
+
 ## 1. Goal and design direction
 
 Deliver small, independently useful PRs to
@@ -169,6 +197,23 @@ deployments may deliberately deny ping. Define confirmation using the actual
 management path or an explicit supported probe. A successful established tunnel
 does not prove a fresh handshake or newly loaded trust.
 
+**Local validity is not peer acceptance.** A leaf signed by the selected CA may
+pass this host's verification, configuration validation and activation checks
+while another required peer still trusts only the old CA. Our existing positive
+LXD handshake checks use compatible peer trust; they do not cover that ordering
+mistake. A reviewer reports that reissue triggers re-handshakes and that issuer
+rejection is logged on the rejecting peer, while the updated node may show only
+retries/`Handshake timed out`. Record the tested releases, commands and logs when
+reproducing this; do not treat the report as additional completed LXD evidence.
+
+A future peer-confirmation check must observe a newly completed Nebula handshake
+with the intended peer and certificate/issuer, not merely SIGHUP, an existing
+tunnel or an already-open SSH connection. Capture logs on both endpoints after
+the operation. A timeout is an activation/confirmation failure but is not by
+itself proof of a trust error: transport and firewall failures can look similar.
+One successful peer cannot establish fleet-wide trust. Keep this limitation
+explicit in P3; require the complete participant trust gates in P7/P8.
+
 Ansible `rescue`/`always` cannot be the only rollback mechanism when restarting
 Nebula can disconnect its own controller. A local timed, transaction-identified
 rollback must survive controller loss, avoid racing with confirmation or later
@@ -236,6 +281,17 @@ boundaries. P0 evolves alongside each PR; tests are not postponed to the end.
 
 ### P3 priorities before proposing safe-PKI upstream
 
+- Prepare an install-mode PR and a dependent in-place CA-node PR from a common
+  tested base, rather than presenting the whole integration branch as one small
+  patch. Keep the integrated branch and its protections intact while extracting
+  the review branches; do not rewrite or remove tested work merely to reduce
+  the diff. The first PR must state its excluded CA-node behavior, preserve that
+  path's baseline semantics, and pass its own baseline/failure tests. The second
+  must add snapshot-before-sign ownership and in-place failure coverage. Re-run
+  tests on each actual PR head, not only on their combined stack.
+- Keep the README behavior-first and concise. Internal helper dispatch belongs
+  in task comments/the design plan, not explanatory leftovers such as "No phase
+  selector is needed". State local-validation and peer-trust limits prominently.
 - Keep the tested task-file refactor in §4.5 separate from the upcoming behavior
   changes. Preserve its ordinary/in-place caller, check-mode, restoration and
   cleanup coverage; add targeted same-play repeated-include and recovery-failure
@@ -251,6 +307,54 @@ boundaries. P0 evolves alongside each PR; tests are not postponed to the end.
   watchdog coordination and fresh check-mode cases before claiming those paths.
 - Distinguish first deployment/inactive-service handling from recovery of an
   existing running host; avoid promising protection never implemented or tested.
+
+### P3 review boundary: who modifies the live files?
+
+- **PR A / install mode:** applies proposed files to a consumer that has not
+  already been changed by signing (non-CA nodes and separate-CA lighthouses).
+  Its shared helpers need no in-place dispatch. Preserve the legacy same-host
+  caller path explicitly rather than relying on an empty changed set to exclude
+  it: runtime-address reconciliation can require activation even when file
+  checksums match. Retain network/prefix restart classification, actual address
+  verification and restart-aware restoration; a reload-only extraction would
+  reintroduce the demonstrated regression. Applying all files before validation
+  is not atomic publication against concurrent readers/restarts.
+- **PR B / in-place mode:** adds the pre-sign snapshot and caller-owned recovery
+  around signing, then compares that snapshot to post-sign metadata and reuses
+  A's activation path. It must handle both reload and restart, not just reload.
+  Avoid rewriting the already installed content where unnecessary, while
+  deciding explicitly how existing metadata correction and check mode behave.
+  A hostname equality test selects this current caller path, but the shared
+  operation flag still means "signing already changed these files".
+  Define no-drift behavior precisely: the current in-place path can create and
+  remove a pre-sign backup even when no signing occurs. Its no-op tests establish
+  zero reported changes, unchanged PKI/PID and no HUP, not absence of temporary
+  backup work.
+- "No new variables" should mean no new user-facing settings without a reason;
+  internal snapshot/transaction outputs are still needed. No signing changes
+  belong in A merely to accommodate B. Peer-trust confirmation is a separate
+  activation/rotation concern shared by both modes.
+- Neither branch is merely mechanical: A changes running-service activation,
+  validation and recovery; B adds a transaction spanning the signer. Preserve
+  diagnostic evidence when recovery fails and do not blindly delete the only
+  recovery copy just to satisfy an "always clean up" slogan.
+
+The existing LXD runner is on `feature/lxd-regression-tests`, commit `8312726`:
+[`testing/lxd/run.py`](testing/lxd/run.py) (`safe_apply()` and
+`safe_apply_ip_change()`), with test-only inputs in
+[`testing/lxd/safe-apply.yml`](testing/lxd/safe-apply.yml). The first method's
+node/lighthouse cases cover A, and its CA-node section covers B; the IP method
+also mixes both modes. These are integration scenarios, not independently
+selectable A/B suites yet. Split their selection with the PR extractions so A
+does not fail on deliberately excluded B behavior or silently skip required A
+checks. Run each extracted head fresh and against its appropriate baseline.
+
+Current gaps for the proposed split include an explicit unpatched-master
+CA-node reproducer observing the certificate actually presented on a fresh
+handshake, a separately forced `nebula -test` failure with otherwise valid input,
+and the negative peer-trust case in P8. Key mismatch already exercises a real
+configuration/key-pair validation failure; wrong-CA tests reject locally and do
+not substitute for peer rejection of a locally valid new issuer.
 
 ### A1 — Config classification using the same transaction
 
@@ -440,6 +544,13 @@ literally, including preservation of signer and leaf certificate/key hashes.
   trust behavior, including old-CA rejection after retirement and recovery after
   restoring the intended peer certificate. File contents plus ping alone do not
   prove all CAs are loaded, and an existing tunnel may hide stale trust.
+- Add the missing negative peer-trust case: let a node trust old+new, give it a
+  locally valid new-CA leaf, and leave a required peer trusting only old. Prove
+  local validation can pass while a newly attempted handshake fails; collect
+  both endpoints' evidence and require the rotation gate to stop. Then load
+  overlap trust on the peer and require a newly completed handshake. Reproduce
+  and record version-specific handshake/re-handshake signals before using them
+  as production confirmation criteria.
 - Preserve semantic name/networks/groups, certificate format as intended, and
   private-key hashes. Require hash preservation of unchanged files; do not
   demand byte-identical certificates after intentional reissue.

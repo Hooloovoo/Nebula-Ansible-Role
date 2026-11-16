@@ -1,6 +1,6 @@
 # LXD regression tests
 
-These tests deploy a role checkout to three disposable Ubuntu LXD VMs (lighthouse, server, client or CA host). They use the real Nebula binaries, services, role tasks and templates. Certificate checks read real certificates; firewall and CA checks use traffic over the Nebula overlay. The suite runs Nebula 1.8.0, 1.9.5, 1.11.2 and 1.12.0 by default. It can take a substantial amount of time, particularly on a remote LXD host.
+These tests deploy a role checkout to three disposable Ubuntu LXD VMs (lighthouse, server, client or CA host). They use real Nebula binaries, services, role tasks and templates. The default matrix is 1.8.0 and 1.9.5; select newer releases explicitly. Runs can take substantial time on a remote LXD host.
 
 ## Prerequisites
 
@@ -68,6 +68,47 @@ the test runner.
 Every run uses random instance names and a per-run ownership marker. Normal cleanup removes only VMs created by that run. The manifest allows cleanup after an interruption; retained instances must still have the expected marker. Do not edit manifests or reuse instance names. If the client loses access or a launch fails before its marker is written, inspect the LXD project and resolve cleanup manually.
 
 ## What is checked
+
+### Selecting the proposed PKI PRs
+
+`--scenario safe-pki` runs both `safe-apply` and `safe-apply-ip-change`.
+Use `--pki-mode install` for PR A, `in-place` for PR B on top of A, and
+`combined` for A+B. Existing scenario commands still default to combined.
+Install selection never provisions the signer as a node or requires B's signing
+snapshot. In-place selection bootstraps the separate CA topology directly.
+
+```sh
+# Preview without LXD access, then remove --list-tests to execute.
+python testing/lxd/run.py --role-path /path/to/pr-a --scenario safe-pki \
+  --pki-mode install --nebula-version 1.8.0 --list-tests
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/pr-b --baseline-role-path /path/to/pr-a \
+  --scenario safe-pki --pki-mode in-place --nebula-version 1.8.0
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/combined --scenario safe-pki --pki-mode combined \
+  --nebula-version 1.8.0 --nebula-version 1.11.2 --nebula-version 1.12.0
+```
+
+Run each candidate fresh and with its appropriate baseline. For in-place mode,
+the baseline upgrade provisions a CA-node before applying the candidate; other
+modes retain the default-topology upgrade. Baseline upgrade checks apply to
+`safe-apply`; the IP scenario creates fresh fixtures. Prerequisite JSON fixes
+must be present in the selected checkouts for newer releases.
+
+Each run records mode, scenario, role/baseline paths and completion status in
+`manifest.json`, plus assertion outcomes in `assertions.json`. Verify retention:
+
+```sh
+python testing/lxd/compare-pki-coverage.py \
+  --combined /runs/combined-safe-apply /runs/combined-ip \
+  --install /runs/install-safe-apply /runs/install-ip \
+  --in-place /runs/in-place-safe-apply /runs/in-place-ip
+python -m unittest discover -s testing/lxd -p 'test_pki_selection.py' -v
+```
+
+The comparison requires matching release/scenario pairs, rejects partial or
+failed runs and preserves repeated helper assertions. Topology-specific baseline
+checks are evaluated in their runs but excluded from coverage arithmetic.
 
 The certificate scenario checks empty, single and multiple groups; group additions, removals, replacement and clearing; order-insensitive idempotence; and actual certificate/key hashes. The firewall scenario checks actual allowed and denied TCP connections, template output and `nebula -test`. It exercises node and lighthouse inbound group rules and client outbound group rules.
 
