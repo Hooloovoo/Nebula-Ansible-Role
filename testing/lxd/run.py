@@ -58,6 +58,7 @@ class Suite:
             'role_path': str(self.args.role_path),
             'baseline_role_path': str(self.args.baseline_role_path) if self.args.baseline_role_path else None,
             'status': self.status,
+            'feature_case': getattr(self.args, 'feature_case', None),
         }, indent=2) + '\n')
 
     def command(self, command, check=True, timeout=600):
@@ -944,7 +945,8 @@ def main():
     parser.add_argument('--memory', default='1GiB')
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
-    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'safe-pki', *PKI_SCENARIOS], default='auto')
+    parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'role-feature', 'safe-pki', *PKI_SCENARIOS], default='auto')
+    parser.add_argument('--feature-case', choices=['subject', 'signer', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'rotation-ssh'])
     parser.add_argument('--pki-mode', choices=['install', 'in-place', 'combined'],
                         help='safe-PKI coverage: PR A, PR B, or both (default: combined)')
     parser.add_argument('--list-tests', action='store_true', help='print resolved runs without provisioning or requiring LXD access')
@@ -960,6 +962,8 @@ def main():
     if args.pki_mode is not None and args.scenario not in ('safe-pki', 'all', *PKI_SCENARIOS):
         parser.error('--pki-mode requires --scenario safe-pki, safe-apply, safe-apply-ip-change, or all')
     args.pki_mode = args.pki_mode or 'combined'
+    if (args.scenario == 'role-feature') != (args.feature_case is not None):
+        parser.error('--scenario role-feature and --feature-case must be supplied together')
     if not args.list_tests and (not args.remote or not args.project):
         parser.error('--remote and --project are required (or set LXD_REMOTE and LXD_PROJECT)')
     args.role_path = args.role_path.expanduser().resolve()
@@ -973,6 +977,7 @@ def main():
     except OSError as exc:
         parser.error(f'--role-path must be a Nebula role checkout: {exc}')
     supported = []
+    supported.append('role-feature')
     if 'nebula_cert_groups' in defaults:
         supported.append('certificates')
         supported.append('certificate-format-upgrade')
@@ -1026,6 +1031,9 @@ def main():
                         suite.safe_apply()
                     elif scenario == 'safe-apply-ip-change':
                         suite.safe_apply_ip_change()
+                    elif scenario == 'role-feature':
+                        from series_cases import run_feature
+                        run_feature(suite, args.feature_case)
                     else:
                         suite.firewall()
                 failed = False

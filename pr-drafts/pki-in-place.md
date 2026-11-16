@@ -32,3 +32,9 @@ Reference selector rehearsal against integrated `8a2c46b`, on 1.8.0: 39 in-place
 reload/signing-failure assertions, 3 baseline-upgrade assertions and 17 in-place
 IP/restart assertions passed. These do not certify the yet-unextracted B head.
 Record that head's results and a baseline bug reproducer before submission.
+
+Actual branch: `pr/pki-in-place`, head `2ef39af`, based on A `2d4b0c4`.
+The 1.12.0 test on A failed at `client reload reports current fingerprint`
+(`nebtest-281b3a2d1a`). After B, 42 reload/upgrade and 17 restart assertions
+passed on each of 1.8.0 and 1.12.0. Green run IDs: `nebtest-893f3ee16e`,
+`nebtest-4868c113f4`, `nebtest-a83fc00357`, `nebtest-ec4e3b553a`.

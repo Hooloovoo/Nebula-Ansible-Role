@@ -1,2 +1,4 @@
 # ssh keys
 ansible_*
+__pycache__/
+*.py[cod]

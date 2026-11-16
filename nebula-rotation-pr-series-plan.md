@@ -2,6 +2,27 @@
 
 ## Active implementation ledger
 
+### Branch index (stacked bases; never force-pushed)
+
+| PR | Branch / head | Base | Focus | Actual-head LXD evidence |
+|---|---|---|---|---|
+| prerequisite | `feature/cert-json-compat` / `a0527eb` | upstream `db0ebc4` | Submitted PR25 | Earlier matrix recorded below |
+| A | `pr/pki-install` / `2d4b0c4` | PR25 | Consumer-owned PKI transaction | 1.8.0 and 1.12.0: 98 reload/upgrade + 60 restart assertions each |
+| B | `pr/pki-in-place` / `2ef39af` | A | Pre-sign snapshot on CA-nodes | Red on A; green on 1.8.0/1.12.0: 42 reload/upgrade + 17 restart assertions each |
+| C | `pr/cert-subject` / `10415ae` | B | Subject independent of filename | Red then 5 green assertions on 1.12.0 |
+| D | `pr/ca-signing-inputs` / `b9504f4` | C | Isolated signer and supplied trust bundle | Red then 5 green assertions each on 1.10.3/1.12.0 |
+| E | `pr/staged-cert-signing` / `6719db2` | D | Verified staged reissue; preserve/localize keys | Red then 5 green assertions each on 1.8.0/1.12.0 |
+| F | `pr/lighthouse-cert-drift` / `eeb75c5` | E | Shared node/lighthouse reconciliation | Red then 6 green assertions each on 1.8.0/1.12.0 |
+| G | `pr/cert-issuer-drift` / `e9d397b` | F | Ordinary-role issuer convergence | Red then 11 green assertions on 1.12.0 |
+| H | `pr/confirmed-activation` (in progress) | G | Local rollback + management confirmation | Not yet verified |
+| I | planned `pr/config-reload` | H | Classified recoverable config reload | Not yet built |
+| J | planned `pr/ca-rotation` | I | Fleet gates reusing normal-role mechanisms | Not yet built |
+
+The linear bases make integration reproducible; C and D can also be offered as
+independent cherry-pickable features if upstream prefers. Exact prerequisite
+decisions and test-stack heads must be stated in each draft, not guessed from
+feature names. Maintainer drafts are in `pr-drafts/`.
+
 The integrated safe-PKI implementation is preserved at `8a2c46b`; the original
 complete regression suite is preserved at `8312726`. Extracted PRs must retain
 their combined behavior, including network-change restart/recovery. Do not
