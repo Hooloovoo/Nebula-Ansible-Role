@@ -18,6 +18,13 @@
   loop_control:
     label: "{{ item['item'] }}"
   notify: restart nebula
+  when: nebula_ca_host == inventory_hostname
+
+- name: Apply PKI received from the CA host
+  include_tasks: install_pki.yml
+  vars:
+    pki_files: "{{ lighthouse_files.results }}"
+  when: nebula_ca_host != inventory_hostname
 
 - name: Ensure Nebula is configured
   template:
@@ -60,4 +67,3 @@
     minute: "{{ nebula_check_cron_minute | default('*/5') }}"
     job: "{{ nebula_config_dir }}/nebula-check.sh"
   when: nebula_install_check_cron|bool
-

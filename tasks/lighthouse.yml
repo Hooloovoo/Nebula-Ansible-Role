@@ -28,17 +28,10 @@
   when: nebula_ca_host != inventory_hostname
 
 - name: Ensure lighthouse has its cert/key/CA files
-  copy:
-    dest: "{{ nebula_config_dir }}/{{ item['item'] }}"
-    content: "{{ item['content'] | b64decode }}"
-    owner: root
-    group: root
-    mode: 0600
-  loop: "{{ lighthouse_ca_host_files.results }}"
-  loop_control:
-    label: "{{ item['item'] }}"
+  include_tasks: install_pki.yml
+  vars:
+    pki_files: "{{ lighthouse_ca_host_files.results }}"
   when: nebula_ca_host != inventory_hostname
-  notify: restart nebula
 
 - name: Ensure lighthouse is configured
   template:

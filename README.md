@@ -60,6 +60,24 @@ and waits for the connection to come back.
 
 # Custom CA Host
 
+## Applying PKI updates
+
+Running Linux nodes receiving certificates from another CA host, and lighthouses
+with a separate CA host, back up changed PKI in a temporary root-only directory.
+The complete certificate/key set is validated before activation. Compatible
+changes reload Nebula; network/prefix changes restart it and verify the tunnel
+addresses (`ip -json` from iproute2). Handled failures restore the original files
+and reload or restart as needed. Temporary backups are removed afterward.
+
+Renumbering interrupts overlay connections: use independent management. Recovery
+cannot run if the controller loses access. Local validation does not establish
+peer trust; coordinate overlap trust before changing issuer and verify fresh
+peer connections afterward. Multiple copies are not an atomic publication.
+
+CA-host nodes retain their existing signing/install behavior. First installs,
+inactive services, config/unit/binary changes and Windows retain their normal
+paths. Check mode does not create backups or activate changes.
+
 By default the lighthouse holds the CA private key and signs every certificate. To keep the CA key off a
 publicly reachable lighthouse, set `nebula_ca_host` to the inventory hostname of another Linux host:
 

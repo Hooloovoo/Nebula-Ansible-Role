@@ -1,0 +1,13 @@
+---
+# Read public certificate network fields across the old and new JSON formats.
+- name: Read installed certificate networks
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ nebula_config_dir }}/{{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}.crt"]
+  register: pki_network_certificate
+  changed_when: false
+  check_mode: false
+
+- name: Normalize installed certificate networks
+  set_fact:
+    pki_certificate_networks: "{{ pki_network_certificate.stdout | from_json | json_query('[].details.networks[] || details.ips || `[]`') | unique | sort }}"
+    pki_certificate_unsafe_networks: "{{ pki_network_certificate.stdout | from_json | json_query('[].details.unsafeNetworks[] || details.subnets || `[]`') | unique | sort }}"
