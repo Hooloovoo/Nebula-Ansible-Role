@@ -285,8 +285,12 @@ class Suite:
         lh_hashes = self.hashes('lh')
         self.groups['lh'] = ['lighthouse-admins']
         self.deploy('lh')
-        self.check('lighthouse group drift does not re-sign', self.hashes('lh') == lh_hashes)
+        if (self.args.role_path / 'tasks/node_pki.yml').is_file():
+            self.check('lighthouse group drift reconciles through the shared signer', self.hashes('lh') != lh_hashes and self.groups_are('lh', ['lighthouse-admins']))
+        else:
+            self.check('lighthouse group drift does not re-sign', self.hashes('lh') == lh_hashes)
         for groups in (['lighthouse-admins'], ['lighthouse-admins', 'other'], []):
+            self.guest('lh', 'systemctl', 'stop', 'lighthouse')
             self.guest('lh', 'rm', '-f', '/opt/nebula/lh.crt', '/opt/nebula/lh.key')
             self.groups['lh'] = groups
             self.deploy('lh')
@@ -502,12 +506,18 @@ while True:
             self.inbound['server'] = [{'port': 'any', 'proto': 'icmp', 'host': 'any'}]
             old_pid = pid('server')
             self.deploy('server')
-            self.check('config change still restarts', old_pid != pid('server'))
+            if (self.args.role_path / 'tasks/apply_config.yml').is_file():
+                self.check('reloadable firewall config preserves process', old_pid == pid('server'))
+            else:
+                self.check('config change still restarts', old_pid != pid('server'))
             self.inbound['server'] = ANY
             self.groups['server'].append('combined-change')
             old_pid = pid('server')
             self.deploy('server')
-            self.check('combined config and PKI change succeeds and restarts', old_pid != pid('server'))
+            if (self.args.role_path / 'tasks/apply_config.yml').is_file():
+                self.check('compatible combined config and PKI changes preserve process', old_pid == pid('server'))
+            else:
+                self.check('combined config and PKI change succeeds and restarts', old_pid != pid('server'))
 
             # Fresh separate-CA topology also exercises lighthouse installation.
             self.cleanup()
@@ -565,10 +575,16 @@ while True:
             count = start_stream('server', 'lh', '10.193.0.1')
             old_pid, position = pid('lh'), cursor('lh')
             self.guest('client', 'rm', '/opt/nebula/lh.crt', '/opt/nebula/lh.key')
-            self.ca_deploy(separate=True, ca_node=in_place, limit='lh')
+            self.ca_deploy(separate=True, ca_node=in_place, limit='lh',
+                           extra=['-e', json.dumps({'nebula_cert_groups': ['lighthouse-updated']})]
+                           if (self.args.role_path / 'tasks/node_pki.yml').is_file() else ())
             activate('lh', 'lh', old_pid, position)
             stream_survives('server', count)
             self.fresh_handshake('lh', 'server', '10.193.0.2')
+            if (self.args.role_path / 'tasks/node_pki.yml').is_file():
+                desired = json.loads(inventory.read_text())
+                desired['all']['children']['nebula_lighthouse']['hosts']['lh']['nebula_cert_groups'] = ['lighthouse-updated']
+                inventory.write_text(json.dumps(desired))
             unchanged('lh', 'lh', inventory, 'ca-deploy.yml', 'lh')
 
         if install:
@@ -598,23 +614,25 @@ while True:
         try:
             self.guest('client', '/opt/nebula/nebula-cert.real', 'ca', '-name', 'untrusted-test-ca', '-duration', '87600h',
                        '-out-crt', rogue + '/ca.crt', '-out-key', rogue + '/ca.key')
-            wrapper = '#!/bin/sh\n/opt/nebula/nebula-cert.real "$@" || exit $?\nif [ "$1" = sign ]; then cp /opt/nebula/lh.key /opt/nebula/cah.key; fi\n'
+            wrapper = '#!/bin/sh\n/opt/nebula/nebula-cert.real "$@" || exit $?\nif [ "$1" = sign ]; then cp /opt/nebula/server.key /opt/nebula/cah.key; fi\n'
             self.guest('client', 'python3', '-c', 'from pathlib import Path; import sys; p=Path("/opt/nebula/nebula-cert"); p.write_text(sys.argv[1]); p.chmod(0o755)', wrapper)
             status, _ = run(inventory, 'ca-deploy.yml', 'cah',
                             ['-e', json.dumps({'nebula_cert_groups': ['invalid-new']})], check=False)
             self.check('CA-node invalid in-place signing fails', status != 0)
             self.check('CA-node rollback restores hashes', before == hashes('client', 'cah'))
             activate('client', 'cah', old_pid, position)
-            wrapper = ('#!/bin/sh\nif [ "$1" = sign ]; then shift; exec /opt/nebula/nebula-cert.real sign '
-                       '-ca-crt ' + rogue + '/ca.crt -ca-key ' + rogue + '/ca.key "$@"; fi\n'
-                       'exec /opt/nebula/nebula-cert.real "$@"\n')
+            wrapper = ('#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\n'
+                       'if a and a[0] == "sign":\n'
+                       '    for flag,value in [("-ca-crt",' + repr(rogue + '/ca.crt') + '),("-ca-key",' + repr(rogue + '/ca.key') + ')]:\n'
+                       '        if flag in a: a[a.index(flag)+1]=value\n'
+                       '        else: a[1:1]=[flag,value]\n'
+                       'os.execv("/opt/nebula/nebula-cert.real",["/opt/nebula/nebula-cert.real"]+a)\n')
             self.guest('client', 'python3', '-c', 'from pathlib import Path; import sys; Path("/opt/nebula/nebula-cert").write_text(sys.argv[1])', wrapper)
             position = cursor('client')
             status, output = run(inventory, 'ca-deploy.yml', 'cah',
                                  ['-e', json.dumps({'nebula_cert_groups': ['wrong-ca']})], check=False)
             self.check('CA-node wrong-CA signing fails at trust verification', status != 0 and
-                       'Verify node certificate against the CA bundle' in output and
-                       'PKI installation or activation failed at' in output)
+                       re.search(r"failed at '(Verify node certificate against the CA bundle|Verify staged leaf against intended CA)'", output) is not None)
             self.check('CA-node wrong-CA rollback restores hashes', before == hashes('client', 'cah'))
             activate('client', 'cah', old_pid, position)
             # Failure before a complete keypair exists exercises outer rescue.
@@ -922,9 +940,13 @@ def cleanup_saved(path):
     run_id = manifest['run_id']
     if not re.fullmatch(r'nebtest-[0-9a-f]{10}', run_id):
         raise ValueError('Invalid run identifier')
+    existing = {item['name'] for item in json.loads(subprocess.check_output(
+        ['lxc', 'list', manifest['remote'] + ':', '--project', manifest['project'], '--format', 'json'], text=True))}
     for name in reversed(manifest['instances']):
         if not re.fullmatch(re.escape(run_id) + r'-(lh|server|client)', name):
             raise ValueError('Invalid instance name in manifest')
+        if name not in existing:
+            continue
         base = ['lxc', 'config', 'get', manifest['remote'] + ':' + name, 'user.nebula-test-run', '--project', manifest['project']]
         result = subprocess.run(base, capture_output=True, text=True)
         if result.returncode:
@@ -946,7 +968,7 @@ def main():
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
     parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'role-feature', 'safe-pki', *PKI_SCENARIOS], default='auto')
-    parser.add_argument('--feature-case', choices=['subject', 'signer', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'rotation-ssh'])
+    parser.add_argument('--feature-case', choices=['debug-keys', 'subject', 'signer', 'legacy-bundle', 'legacy-expired-bundle', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'trust-only', 'rotation-ssh', 'ssh-recovery'])
     parser.add_argument('--pki-mode', choices=['install', 'in-place', 'combined'],
                         help='safe-PKI coverage: PR A, PR B, or both (default: combined)')
     parser.add_argument('--list-tests', action='store_true', help='print resolved runs without provisioning or requiring LXD access')
@@ -1016,6 +1038,9 @@ def main():
             failed = True
             try:
                 suite.provision()
+                if scenario == 'role-feature' and args.feature_case in ('rotation-ssh', 'ssh-recovery'):
+                    from series_ssh import seed_v1_ca
+                    seed_v1_ca(suite)
                 if scenario == 'ca-host':
                     suite.ca_host()
                 else:

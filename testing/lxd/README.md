@@ -63,9 +63,9 @@ remains 1.8.0 and 1.9.5. These tests use the selected checkout as-is: apply the
 compatibility fix when testing newer binaries, rather than patching the role in
 the test runner.
 
-`LXD_REMOTE` and `LXD_PROJECT` supply defaults for the corresponding options. `--image` defaults to `ubuntu:24.04`; `--profile` to `default`; `--memory` to `1GiB`; `--cpus` to `2`. Use `--artifacts` to choose the parent directory for logs and manifests. `--scenario` accepts `auto`, `all`, `certificates`, `certificate-format-upgrade`, `firewall`, `ca-host`, `safe-apply`, or `safe-apply-ip-change`. `auto` selects supported ordinary certificate, firewall and CA-host tests; upgrade and safe-PKI acceptance tests are opt-in. `all` requires every scenario's features in the selected checkout; explicit scenarios fail fast if their feature is absent. The version option may be repeated. See `--help` for the complete interface.
+`LXD_REMOTE` and `LXD_PROJECT` supply defaults for the corresponding options. `--image` defaults to `ubuntu:24.04`; `--profile` to `default`; `--memory` to `1GiB`; `--cpus` to `2`. Use `--artifacts` to choose the parent directory for logs and manifests. `--scenario` accepts `auto`, `all`, `certificates`, `certificate-format-upgrade`, `firewall`, `ca-host`, `safe-pki`, `safe-apply`, `safe-apply-ip-change`, or `role-feature`. `auto` selects supported ordinary certificate, firewall and CA-host tests; upgrade and safe-PKI acceptance tests are opt-in. `all` requires every ordinary/PKI scenario's features in the selected checkout; focused `role-feature` cases are selected separately. The version option may be repeated. See `--help` for the complete interface.
 
-Every run uses random instance names and a per-run ownership marker. Normal cleanup removes only VMs created by that run. The manifest allows cleanup after an interruption; retained instances must still have the expected marker. Do not edit manifests or reuse instance names. If the client loses access or a launch fails before its marker is written, inspect the LXD project and resolve cleanup manually.
+Every run uses random instance names and a per-run ownership marker. Normal cleanup removes only VMs created by that run. The manifest allows cleanup after an interruption; retained instances must still have the expected marker. Repeating cleanup tolerates instances already removed by a partially completed cleanup. Do not edit manifests or reuse instance names. If the client loses access or a launch fails before its marker is written, inspect the LXD project and resolve cleanup manually.
 
 ## What is checked
 
@@ -139,7 +139,8 @@ are checked separately.
 Pass `--baseline-role-path` to verify a zero-change upgrade from that role first.
 For Nebula 1.10+, both tested and baseline roles need upstream PR #25's JSON
 compatibility patch in the throwaway test stack; it is not part of safe apply.
-The co-located CA/lighthouse has no automatic re-sign path and is excluded.
+The original A/B cases do not rely on automatic co-located lighthouse re-signing;
+the later F branch adds that behavior and its focused case checks it directly.
 The role templates use text-format logging; fingerprint assertions exercise
 that format. The fixture disables the connectivity-check cron job, so it does
 not test concurrent watchdog restarts or atomic publication of multiple files.
@@ -182,13 +183,53 @@ Keep coverage grouped by independently useful changes to the regular role:
 - Safe PKI application: `safe-apply`, including existing-deployment upgrades,
   connection continuity, trust verification, and rollback.
 
-Full CA rotation remains a later end-to-end acceptance target. Experimental
-scenarios and helper playbooks are preserved on
-`testing/lxd-rotation-experiments`; the earlier modular rotation suite is on
-`feature/lxd-ca-rotation-tests`. Extract general-purpose checks from those
-branches as supporting role PRs settle their interfaces. They are not part of
-this runner's default or `all` scenarios. Add the final rotation acceptance
-scenario when its documented workflow can be exercised literally.
+### Focused role features and SSH rotation
+
+Use `--scenario role-feature --feature-case CASE` with the appropriate role
+branch. These cases are opt-in and do not expand `auto` or `all`:
+
+| Case | Required feature / acceptance scope |
+|---|---|
+| `subject` | C: explicit certificate subjects, canonical filenames and repeat convergence |
+| `signer` | D: separate signer inputs and intact desired trust containing an expired historical CA |
+| `legacy-bundle` | Existing shared default signing/trust paths, first-CA issue and intact multi-CA distribution |
+| `legacy-expired-bundle` | Same legacy path with an expired historical trust entry, not a filtered runtime bundle |
+| `staged` | E: retained keys, failed-signing preservation, missing private signer cache and cleanup |
+| `lighthouse` | F: ordinary lighthouse drift, retained key/process and repeat convergence |
+| `issuer` | G: issuer migration through ordinary reconciliation and eventual trust retirement |
+| `confirmation` | H: explicit failure, killed controller and independently timed rollback |
+| `config` | I: classified reload/restart, compatible mixed changes and failed-confirmation restoration |
+| `trust-only` | Preserve leaf identities while distributing desired trust |
+| `debug-keys` | Independent inline SSH keys with no file-key registry |
+| `rotation-ssh` | J: prepare/migrate/finalize, fleet gates, persistent SSH, fresh identity probes and phase repeats |
+| `ssh-recovery` | J integration fixture: peer-untrusted certificate and SSH-blocking firewall rollback |
+
+```sh
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/ca-signing-inputs --scenario role-feature \
+  --feature-case legacy-expired-bundle --nebula-version 1.10.3
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/ca-rotation --scenario role-feature \
+  --feature-case rotation-ssh --nebula-version 1.12.0
+```
+
+The SSH cases bootstrap guests over LXD, then run Ansible inside the client VM
+over Nebula SSH, including a controller that is itself a CA/node participant.
+They need guest apt-network access for Ansible, jmespath and OpenSSH packages.
+They explicitly seed version-1 CA material on the modern binary, configure FQDN
+subjects, and retain unrelated and expired historical trust. The controller's
+debug-console probe closes prior tunnel state and verifies both a fresh tunnel
+index and the expected leaf fingerprint. Successful phase continuity is measured
+separately from fresh-handshake trust. Recovery cases deliberately create an
+outage; their failed connection samples must not be described as uninterrupted
+connectivity. Allow ample time on a constrained remote host and avoid concurrent
+large matrices when diagnosing timing-sensitive recovery.
+
+Experimental scenarios and helper playbooks remain preserved on
+`testing/lxd-rotation-experiments` and `feature/lxd-ca-rotation-tests`. The
+focused cases reuse selected ideas rather than requiring those branches as
+production dependencies. See [the PR drafts](../../pr-drafts/series.md) and the central plan
+for branch bases and actual-head evidence.
 
 See [verification results](verification.md) for the tested revisions, completed
 runs, historical IP-change failure and its fix, and coverage limitations.
@@ -200,7 +241,7 @@ its pinned contract can also be checked against saved public JSON results.
 
 `group: ssh-clients` matches one group. `groups: [ssh-clients, admins]` requires **both** ssh-clients **AND** admins; either alone is insufficient. Separate rules are alternatives (OR). A `host: any` selector in a group rule would also match peers outside that group.
 
-The suite tests Linux guests; it does not establish Windows runtime compatibility. It changes no existing instances and does not run on the LXD host itself. Management uses the authenticated LXD connection; test traffic uses Nebula addresses.
+The suite tests Linux guests; it does not establish Windows runtime compatibility. It changes no existing instances and does not run on the LXD host itself. Ordinary management uses the authenticated LXD connection; test traffic uses Nebula addresses. The explicitly selected SSH fixtures additionally manage their test participants over Nebula SSH.
 
 ## Adding tests
 
