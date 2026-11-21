@@ -194,6 +194,7 @@ branch. These cases are opt-in and do not expand `auto` or `all`:
 | `signer` | D: separate signer inputs and intact desired trust containing an expired historical CA |
 | `legacy-bundle` | Existing shared default signing/trust paths, first-CA issue and intact multi-CA distribution |
 | `legacy-expired-bundle` | Same legacy path with an expired historical trust entry, not a filtered runtime bundle |
+| `ca-move` | Literal complete-cache CA-host migration, unchanged consumer hashes/PIDs, no-change repeat and safe old-host key cleanup |
 | `staged` | E: retained keys, failed-signing preservation, missing private signer cache and cleanup |
 | `lighthouse` | F: ordinary lighthouse drift, retained key/process and repeat convergence |
 | `issuer` | G: issuer migration through ordinary reconciliation and eventual trust retirement |
@@ -208,6 +209,9 @@ branch. These cases are opt-in and do not expand `auto` or `all`:
 python testing/lxd/run.py --remote myremote --project my-test-project \
   --role-path /path/to/ca-signing-inputs --scenario role-feature \
   --feature-case legacy-expired-bundle --nebula-version 1.10.3
+python testing/lxd/run.py --remote myremote --project my-test-project \
+  --role-path /path/to/staged-cert-signing --baseline-role-path /path/to/pr25 \
+  --scenario role-feature --feature-case ca-move --nebula-version 1.12.0
 python testing/lxd/run.py --remote myremote --project my-test-project \
   --role-path /path/to/ca-rotation --scenario role-feature \
   --feature-case rotation-ssh --nebula-version 1.12.0
@@ -224,6 +228,14 @@ separately from fresh-handshake trust. Recovery cases deliberately create an
 outage; their failed connection samples must not be described as uninterrupted
 connectivity. Allow ample time on a constrained remote host and avoid concurrent
 large matrices when diagnosing timing-sensitive recovery.
+
+`ca-move` recreates its fixture with the optional baseline role (or the candidate
+if none is supplied), copies every existing `.crt`/`.key` file to the new signer
+without putting private content in artifacts, and changes `nebula_ca_host`.
+Initial setup may change the new CA-only host; existing consumers must report
+zero changes and preserve PKI/processes. Its cleanup removes the old CA signing
+key and cached peer private key, retaining the old lighthouse's own key and
+runtime trust. It verifies fresh connectivity afterward.
 
 Experimental scenarios and helper playbooks remain preserved on
 `testing/lxd-rotation-experiments` and `feature/lxd-ca-rotation-tests`. The

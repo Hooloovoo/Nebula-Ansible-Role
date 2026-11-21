@@ -350,7 +350,7 @@ remaining instance's ownership marker.
 
 ### Final post-compatibility integration
 
-Current role **`77dec86`** merges the compatibility fixes through the recorded
+Tested code head **`77dec86`** merges the compatibility fixes through the recorded
 immediate bases. Its 21 role unit tests pass (6 CA selection, 7 transaction,
 4 configuration classification and 4 rotation). The runner's 10 tests
 (8 selector/coverage and 2 cleanup ownership/idempotency checks), Python
@@ -360,9 +360,46 @@ Initial concurrent reruns were not complete passes: `nebtest-c37e420049`
 reached the wrong-CA lighthouse recovery and then failed backup cleanup after
 an empty Ansible module response; `nebtest-57d9400133` passed prepare/migrate,
 their repeats and the exercised negative gates but hit the outer 30-minute
-deadline before completing finalization. Neither supersedes the completed
-implementation-head evidence. Serial reruns with two vCPUs are in progress;
-their final results will be recorded here before completion.
+deadline before completing finalization. Neither is counted as a completed pass.
+Serial reruns with two vCPUs completed successfully:
+
+| Scenario | Release | Assertions | Run ID |
+|---|---|---|---|
+| PKI with PR25 baseline adoption | 1.12.0 | **137** | `nebtest-5ba2a9e6fd` |
+| IP/restart and injected startup recovery | 1.12.0 | **77** | `nebtest-338d6fca5c` |
+| Complete rotation over Nebula SSH | 1.12.0 | **57** | `nebtest-9096c49a4e` |
+| Shared default bundle with expired historical CA | 1.12.0 | **5** | `nebtest-dff2dbdd1e` |
+
+The successful runs retain the earlier contracts: zero-change baseline adoption,
+unchanged healthy identities/PIDs, real interface checks, restored invalid-input
+state, backup cleanup and expected restart behavior. Prepare/migrate/finalize
+and their repeats preserved keys/PIDs and measured SSH continuity; old-issuer
+fresh-handshake rejection and post-rotation ordinary reissue also passed.
+
+### Literal CA-host migration and documentation completion
+
+The default-path migration procedure was followed against an existing PR25
+deployment using E's `afad75e` production code and the clarified README committed
+as **`b4e0957`**. All **8 assertions** passed on 1.12.0
+(`nebtest-9829c9c93d`). Copying the complete CA/leaf certificate/key cache to the
+new CA-only signer preserved all signing/cache hashes. Existing lighthouse/node
+PKI and process IDs stayed unchanged; each consumer reported zero changes.
+The repeat reported zero changes on all three hosts. Cleanup removed the old
+CA signing key and cached peer private key while retaining the old lighthouse's
+own key and runtime CA bundle, then fresh connectivity succeeded.
+
+The first migration attempt (`nebtest-87b2304ed6`) exposed a fixture argv error:
+the LXD project flag was appended after the tar command delimiter. It failed
+before copying private material; corrected flag placement produced the complete
+pass above. Its retained VMs were removed using ownership-checked cleanup.
+
+Migration guidance now distinguishes signing/cached-peer keys from a running
+host's own required private key and includes separately configured inputs.
+E describes node-only key preservation; F's shared path extends it to lighthouses.
+The documentation was propagated through the dependent branches using ordinary
+merges. Final J **`4976a8a`** differs from tested code head `77dec86` only in
+`README.md`; no production tasks, filters or helper changed after those passes.
+All task-owned test VMs were removed, confirmed against the remote/project list.
 
 The ordinary controller uses ansible-core 2.21.6/community.general 13.5.0 and
 the authenticated LXD client. The SSH fixture records its Ubuntu-packaged guest

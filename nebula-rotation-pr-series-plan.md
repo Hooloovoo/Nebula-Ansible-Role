@@ -25,15 +25,15 @@ open PRs without an explicit request.
 | B | `pr/pki-in-place` / `2ef39af` | A | Pre-sign snapshot and CA-node recovery |
 | C | `pr/cert-subject` / `10415ae` | B | Subject independent of inventory filename |
 | D | `pr/ca-signing-inputs` / `6be8e73` | C | Isolated signer and supplied trust bundle |
-| E | `pr/staged-cert-signing` / `afad75e` | D | Verified staged reissue; retain/localize keys |
-| F | `pr/lighthouse-cert-drift` / `8639ca2` | E | Shared node/lighthouse reconciliation |
-| G | `pr/cert-issuer-drift` / `7d9e84f` | F | Ordinary-role issuer convergence |
-| H | `pr/confirmed-activation` / `71c7f94` | G | Local rollback and management confirmation |
-| I | `pr/config-reload` / `b3aefce` | H | Classified recoverable configuration reload |
-| trust-only | `pr/trust-only-updates` / `0a47ee2` | I | Distribute trust without reconciling leafs |
+| E | `pr/staged-cert-signing` / `b4e0957` | D | Verified staged reissue; retain/localize keys |
+| F | `pr/lighthouse-cert-drift` / `079e481` | E | Shared node/lighthouse reconciliation |
+| G | `pr/cert-issuer-drift` / `3f67862` | F | Ordinary-role issuer convergence |
+| H | `pr/confirmed-activation` / `101af7d` | G | Local rollback and management confirmation |
+| I | `pr/config-reload` / `c2acb52` | H | Classified recoverable configuration reload |
+| trust-only | `pr/trust-only-updates` / `06194cd` | I | Distribute trust without reconciling leafs |
 | debug keys | `pr/inline-debug-keys` / `7b381d8` | PR25 | Inline debug SSH keys without a file registry |
-| integration base | `integration/rotation-base` / `df7a258` | trust-only + debug keys | Reproducible prerequisite merge |
-| J | `pr/ca-rotation` / `77dec86` | integration base | Fleet phases and trust gates |
+| integration base | `integration/rotation-base` / `77ee8fb` | trust-only + debug keys | Reproducible prerequisite merge |
+| J | `pr/ca-rotation` / `4976a8a` | integration base | Fleet phases and trust gates |
 
 Worktrees are under `series/<feature>/`. Review the immediate-base diff with
 `git diff BASE..BRANCH`, not the cumulative diff from upstream. C/D may be
@@ -81,7 +81,13 @@ compatibility checks, original focused runs and final integrated reruns.
 | Trust-only implementation | 3 focused assertions on 1.12.0 |
 | Debug-key fix | Focused red/green on 1.12.0 |
 | J `e3e094b` | 57 SSH rotation + 11 SSH recovery; 137 PKI + 77 IP + 32 certificate + 39 firewall + 28 CA-host assertions on 1.12.0 |
-| Current J `77dec86` | 21 unit tests pass; post-compatibility integrated reruns are tracked in the verification record |
+| J code head `77dec86` | Post-compatibility 137 PKI + 77 IP + 57 SSH rotation + 5 expired shared-bundle assertions on 1.12.0; 21 role unit tests |
+| E migration documentation follow-up | 8 literal default-path CA-host migration assertions on 1.12.0 from a PR25 deployment, including safe key cleanup |
+
+Final E–J heads include documentation-only migration/scope corrections after
+those code tests. `git diff 77dec86..4976a8a` changes only `README.md`.
+The runner's 10 tests (8 selector/coverage, 2 cleanup) also pass. All task-owned
+VMs were removed.
 
 The selector rehearsal against `8a2c46b` proved install + in-place retains all
 **211** combined acceptance assertions, excluding topology-specific baseline
@@ -160,7 +166,7 @@ or infer an untested version cutoff.
 
 ## Implemented fleet workflow
 
-J's [end-user procedure](series/ca-rotation/docs/ca-rotation.md) uses a stable
+J's end-user procedure (`docs/ca-rotation.md` on `pr/ca-rotation`) uses a stable
 rotation ID and the complete `nebula_rotation` participant set:
 
 1. **Prepare:** create a compatible successor and distribute overlap through
@@ -188,12 +194,13 @@ recovery snapshots. After the site's recovery-retention period, distinguish old
 archived signing keys and cached peer keys from the active signer and each
 running host's own required private key.
 
-## Current completion work and future verification
+## Completion and future verification
 
-1. Finish final-stack reruns after the legacy bundle fix; record partial,
-   infrastructure-failed and completed runs separately.
-2. Finish/review the immediate-base drafts and durable evidence; commit verified
-   runner/doc changes and clean only task-owned VMs. Do not push.
+1. Final-stack code reruns, immediate-base draft review and documented CA-host
+   migration are complete. Failed/incomplete attempts remain distinguished from
+   completed passes in the verification record.
+2. Keep the committed local stack and its reference branches intact. Task-owned
+   VMs are cleaned up; pushing and opening PRs require a separate request.
 3. For future submission or deployment, rerun the relevant actual head and follow
    documented migration steps literally. Preserve CA and existing leaf/key
    caches and require zero incidental file changes or service restarts.

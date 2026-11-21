@@ -1,7 +1,7 @@
 # J — Rotate CA trust using ordinary-role reconciliation
 
-**Branch:** `pr/ca-rotation` (`77dec86`; implementation `e3e094b`).
-**Base:** `integration/rotation-base` (`df7a258`), combining trust-only updates
+**Branch:** `pr/ca-rotation` (`4976a8a`; implementation `e3e094b`).
+**Base:** `integration/rotation-base` (`77ee8fb`), combining trust-only updates
 with the independent inline-debug-key fix. The latter supports this acceptance
 fixture; deployments using another confirmation probe need not enable debugging.
 
@@ -55,10 +55,14 @@ PR25 reported zero changes. Separate SSH recovery passed 11 assertions
 from an SSH-blocking firewall change. Deliberate outage samples were counted as
 failures, not hidden from continuity results.
 
-Head `77dec86` merges the legacy shared-bundle compatibility fixes. Its final
-regression reruns, including incomplete attempts, are distinguished in
-`testing/lxd/verification.md`; the earlier complete results are not relabeled
-as tests of this later head. The current unit suite passes all 21 tests.
+Code head `77dec86` merges the legacy shared-bundle compatibility fixes. Its
+completed 1.12.0 reruns passed 137 PKI (`nebtest-5ba2a9e6fd`), 77 IP/restart
+(`nebtest-338d6fca5c`), 57 SSH rotation (`nebtest-9096c49a4e`) and 5 expired
+shared-bundle assertions (`nebtest-dff2dbdd1e`). Earlier incomplete attempts are
+distinguished in `testing/lxd/verification.md`. Final head `4976a8a` changes only
+README migration guidance relative to that tested code. The current unit suite
+passes all 21 tests; the literal CA-host migration passed 8 checks on E with
+unchanged consumer identities/processes and safe old-host key cleanup.
 
 ```sh
 python testing/lxd/run.py --remote REMOTE --project PROJECT \

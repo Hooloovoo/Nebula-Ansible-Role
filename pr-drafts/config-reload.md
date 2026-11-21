@@ -1,7 +1,7 @@
 # I — Reload supported firewall changes through the protected transaction
 
-**Branch:** `pr/config-reload` (`b3aefce`).
-**Base:** `pr/confirmed-activation` (`71c7f94`).
+**Branch:** `pr/config-reload` (`c2acb52`).
+**Base:** `pr/confirmed-activation` (`101af7d`).
 
 ## Why and scope
 

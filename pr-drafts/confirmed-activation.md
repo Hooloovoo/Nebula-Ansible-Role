@@ -1,7 +1,7 @@
 # H — Confirm activation and recover after controller loss
 
-**Branch:** `pr/confirmed-activation` (`71c7f94`).
-**Base:** `pr/cert-issuer-drift` (`7d9e84f`).
+**Branch:** `pr/confirmed-activation` (`101af7d`).
+**Base:** `pr/cert-issuer-drift` (`3f67862`).
 
 ## Why
 
@@ -53,7 +53,7 @@ python -m unittest discover -s /path/to/confirmed-activation/tests -v
 ```
 
 The SSH fixture requires J's workflow files and is integration evidence for the
-shared helper, not a standalone H command. Current head `71c7f94` adds inherited
-legacy CA-bundle fixes; final-stack reruns are recorded separately in
+shared helper, not a standalone H command. Current head adds inherited legacy
+CA-bundle fixes and migration documentation; final-stack reruns are recorded in
 `testing/lxd/verification.md`. Windows, reboot during a transaction, unrelated
 external writers and every possible systemd race are not established here.

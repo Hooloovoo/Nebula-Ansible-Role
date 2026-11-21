@@ -968,7 +968,7 @@ def main():
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
     parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'role-feature', 'safe-pki', *PKI_SCENARIOS], default='auto')
-    parser.add_argument('--feature-case', choices=['debug-keys', 'subject', 'signer', 'legacy-bundle', 'legacy-expired-bundle', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'trust-only', 'rotation-ssh', 'ssh-recovery'])
+    parser.add_argument('--feature-case', choices=['debug-keys', 'subject', 'signer', 'legacy-bundle', 'legacy-expired-bundle', 'ca-move', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'trust-only', 'rotation-ssh', 'ssh-recovery'])
     parser.add_argument('--pki-mode', choices=['install', 'in-place', 'combined'],
                         help='safe-PKI coverage: PR A, PR B, or both (default: combined)')
     parser.add_argument('--list-tests', action='store_true', help='print resolved runs without provisioning or requiring LXD access')

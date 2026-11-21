@@ -5,6 +5,7 @@ import time
 import os
 import signal
 import subprocess
+import re
 
 
 def play(s, inventory, limit, full=False, check=True, extra=(), playbook=None):
@@ -112,6 +113,38 @@ def legacy_bundle(s, expired=False):
     s.deploy('client')
     s.check('legacy bundle repeat preserves the consumer identity', before == s.ca_hashes('client', 'client.crt', 'client.key', 'ca.crt'))
     s.fresh_handshake('client', 'lh', '10.193.0.1')
+
+
+def ca_move(s):
+    s.cleanup()
+    s.provision()
+    tested = s.args.role_path
+    try:
+        s.args.role_path = s.args.baseline_role_path or tested
+        s.ca_deploy()
+    finally:
+        s.args.role_path = tested
+    names = ('ca.crt', 'ca.key', 'lh.crt', 'lh.key', 'server.crt', 'server.key')
+    cached = s.ca_hashes('lh', *names)
+    before = {h: s.ca_hashes(h, h + '.crt', h + '.key', 'ca.crt') for h in ('lh', 'server')}
+    pids = {h: s.guest(h, 'systemctl', 'show', 'lighthouse' if h == 'lh' else 'nebula', '-p', 'MainPID', '--value').stdout for h in before}
+    s.guest('client', 'mkdir', '-p', '/opt/nebula')
+    # Copy the documented complete cache without writing private data to artifacts.
+    archive = subprocess.check_output(s.lxc('exec', s.args.remote + ':' + s.names['lh']) + ['--', 'tar', '-C', '/opt/nebula', '-cf', '-', *names])
+    subprocess.run(s.lxc('exec', s.args.remote + ':' + s.names['client']) + ['--', 'tar', '-C', '/opt/nebula', '-xf', '-'], input=archive, check=True)
+    del archive
+    _, output = s.ca_deploy(separate=True)
+    s.check('CA move preserves signing identity and complete leaf cache', cached == s.ca_hashes('client', *names))
+    s.check('CA move preserves running leaf, key and trust bytes', all(before[h] == s.ca_hashes(h, h + '.crt', h + '.key', 'ca.crt') for h in before))
+    s.check('CA move does not activate running consumers', all(pids[h] == s.guest(h, 'systemctl', 'show', 'lighthouse' if h == 'lh' else 'nebula', '-p', 'MainPID', '--value').stdout for h in before))
+    counts = re.findall(r'^(lh|server)\s+:.*changed=(\d+)', output, re.MULTILINE)
+    s.check('CA move reports zero changes on existing consumers', len(counts) == 2 and all(int(n) == 0 for _, n in counts))
+    _, output = s.ca_deploy(separate=True)
+    counts = re.findall(r'changed=(\d+)', output)
+    s.check('CA move repeat reports zero changes everywhere', len(counts) == 3 and all(int(n) == 0 for n in counts))
+    s.guest('lh', 'rm', '/opt/nebula/ca.key', '/opt/nebula/server.key')
+    s.check('CA move cleanup retains the old host own required private key', before['lh'] == s.ca_hashes('lh', 'lh.crt', 'lh.key', 'ca.crt'))
+    s.fresh_handshake('server', 'lh', '10.193.0.1')
 
 
 def staged(s):
@@ -303,6 +336,7 @@ def run_feature(suite, name):
     cases['trust-only'] = trust_only
     cases['legacy-bundle'] = legacy_bundle
     cases['legacy-expired-bundle'] = lambda s: legacy_bundle(s, expired=True)
+    cases['ca-move'] = ca_move
     if name in ('rotation-ssh', 'ssh-recovery'):
         from series_ssh import rotation_ssh
         return rotation_ssh(suite, recovery_only=name == 'ssh-recovery')

@@ -30,10 +30,10 @@ by older binaries. Five legacy checks passed on 1.8.0 (`nebtest-5e23df6eae`),
 
 ## E — Stage reissue and preserve private-key identity
 
-Branch `pr/staged-cert-signing` (`afad75e`), base D. Reuse the existing public
+Branch `pr/staged-cert-signing` (`b4e0957`), base D. Reuse the existing public
 key and verify temporary output before publishing. Signing failure preserves
-the prior files. Existing Linux consumers no longer need their key cached on
-the CA host. Public-key export reuses the prototype's small curve-aware helper;
+the prior files. Existing Linux nodes no longer need their key cached on
+the CA host; F extends the shared path to lighthouses. Public-key export reuses the prototype's small curve-aware helper;
 it introduces no cryptographic reimplementation. The 1.12.0 key-preservation
 test failed on D (`nebtest-860346a472`). Five assertions passed on 1.8.0
 (`nebtest-ccde0fb0a8`) and 1.12.0 (`nebtest-a8e9a39168`). Windows runtime was not
@@ -45,9 +45,16 @@ The complete staged-failure/key-preservation case passed again on 1.12.0
 passed on 1.10.3 (`nebtest-513252ad32`, 5 assertions). The runtime bundle is not
 filtered to make either test pass.
 
+The documentation follow-up scopes key preservation to nodes until F adds the
+shared lighthouse path, and corrects CA-host migration/cleanup instructions.
+The literal default-path migration from PR25 passed 8 assertions on 1.12.0
+(`nebtest-9829c9c93d`): complete cache/signing identity retained, consumer hashes
+and PIDs unchanged, zero consumer changes, zero-change repeat and retained own
+private key after removing old signing/cached-peer keys.
+
 ## F — Reconcile lighthouse certificates through the normal PKI path
 
-Branch `pr/lighthouse-cert-drift` (`8639ca2`), base E. Remove duplicated lighthouse
+Branch `pr/lighthouse-cert-drift` (`079e481`), base E. Remove duplicated lighthouse
 signing/distribution and reuse node reconciliation, including local snapshots
 for a co-located CA. IP/group drift now reissues the lighthouse certificate, so
 existing deployments must have correct desired values. Rendering is unchanged.
@@ -57,7 +64,7 @@ fresh connectivity, repeated convergence and staging cleanup.
 
 ## G — Reconcile the selected signing issuer
 
-Branch `pr/cert-issuer-drift` (`7d9e84f`), base F. Include the selected CA
+Branch `pr/cert-issuer-drift` (`3f67862`), base F. Include the selected CA
 fingerprint in certificate drift detection. Ordinary role runs can reissue
 under a replacement signer using existing keys. Operators must distribute
 overlap trust before switching inputs; this PR does not infer fleet readiness.
@@ -66,10 +73,11 @@ The test failed on F (`nebtest-090ee55074`), then passed 11 assertions on 1.12.0
 no-op repeats and removal of old trust through normal role runs. This was LXD
 management; SSH-over-Nebula orchestration is a later gate, not implied by it.
 
-Current-head signer inspection isolates the same first public CA used by legacy
+Compatibility follow-up `7d9e84f` isolates the same first public CA used by legacy
 signing, rather than parsing an entire shared bundle as one leaf. Five checks
 passed each on 1.8.0 (`nebtest-841ddc3605`), 1.12.0 (`nebtest-604aad17c0`) and
 1.10.3 with an expired historical entry (`nebtest-8f95dea008`).
+The final head additionally merges only the migration documentation update.
 
 ## H onward
 

@@ -1,7 +1,7 @@
 # Distribute trust without reconciling leaf identities
 
-**Branch:** `pr/trust-only-updates` (`0a47ee2`).
-**Base:** `pr/config-reload` (`b3aefce`).
+**Branch:** `pr/trust-only-updates` (`06194cd`).
+**Base:** `pr/config-reload` (`c2acb52`).
 
 Add `nebula_reconcile_certificates`, defaulting to `true`. Setting it to `false`
 distributes the desired CA bundle through the ordinary protected installer
