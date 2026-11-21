@@ -10,7 +10,7 @@ does not regenerate existing certificates. The focused 1.12.0 test failed on B
 
 ## D — Separate signing identity from distributed CA trust
 
-Branch `pr/ca-signing-inputs` (`b9504f4`), base C. Add explicit signing cert/key
+Branch `pr/ca-signing-inputs` (`6be8e73`), base C. Add explicit signing cert/key
 and supplied-bundle paths with existing defaults. Verify against an isolated
 intended CA and require it in the runtime trust bundle. Include mixed desired
 bundle/in-place certificate change detection. This is independently useful for
@@ -20,9 +20,17 @@ on both 1.10.3 (`nebtest-ec29e25d02`) and 1.12.0 (`nebtest-a797450e81`), includi
 an expired historical CA before the intended signer. Runtime bundle policy is
 tested separately from isolated leaf verification.
 
+The follow-up preserves existing shared-path bundles: isolate their first CA
+for leaf verification, but distribute the complete bundle unchanged. Separate
+signer inputs must contain exactly one public CA. Trust membership compares
+decoded public certificate bytes, avoiding the multiple JSON documents emitted
+by older binaries. Five legacy checks passed on 1.8.0 (`nebtest-5e23df6eae`),
+1.12.0 (`nebtest-3441a7ad04`) and, with an expired historical entry, 1.10.3
+(`nebtest-8cb4805a85`). Six selection/strict-input unit tests pass.
+
 ## E — Stage reissue and preserve private-key identity
 
-Branch `pr/staged-cert-signing` (`6719db2`), base D. Reuse the existing public
+Branch `pr/staged-cert-signing` (`afad75e`), base D. Reuse the existing public
 key and verify temporary output before publishing. Signing failure preserves
 the prior files. Existing Linux consumers no longer need their key cached on
 the CA host. Public-key export reuses the prototype's small curve-aware helper;
@@ -31,9 +39,15 @@ test failed on D (`nebtest-860346a472`). Five assertions passed on 1.8.0
 (`nebtest-ccde0fb0a8`) and 1.12.0 (`nebtest-a8e9a39168`). Windows runtime was not
 tested; its transport path remains compatible but is not claimed verified.
 
+Current-head follow-up isolates the signing CA for both issue and verification.
+The complete staged-failure/key-preservation case passed again on 1.12.0
+(`nebtest-aaab03b164`, 5 assertions); a shared bundle containing an expired CA
+passed on 1.10.3 (`nebtest-513252ad32`, 5 assertions). The runtime bundle is not
+filtered to make either test pass.
+
 ## F — Reconcile lighthouse certificates through the normal PKI path
 
-Branch `pr/lighthouse-cert-drift` (`eeb75c5`), base E. Remove duplicated lighthouse
+Branch `pr/lighthouse-cert-drift` (`8639ca2`), base E. Remove duplicated lighthouse
 signing/distribution and reuse node reconciliation, including local snapshots
 for a co-located CA. IP/group drift now reissues the lighthouse certificate, so
 existing deployments must have correct desired values. Rendering is unchanged.
@@ -43,7 +57,7 @@ fresh connectivity, repeated convergence and staging cleanup.
 
 ## G — Reconcile the selected signing issuer
 
-Branch `pr/cert-issuer-drift` (`e9d397b`), base F. Include the selected CA
+Branch `pr/cert-issuer-drift` (`7d9e84f`), base F. Include the selected CA
 fingerprint in certificate drift detection. Ordinary role runs can reissue
 under a replacement signer using existing keys. Operators must distribute
 overlap trust before switching inputs; this PR does not infer fleet readiness.
@@ -52,8 +66,21 @@ The test failed on F (`nebtest-090ee55074`), then passed 11 assertions on 1.12.0
 no-op repeats and removal of old trust through normal role runs. This was LXD
 management; SSH-over-Nebula orchestration is a later gate, not implied by it.
 
-## Remaining drafts
+Current-head signer inspection isolates the same first public CA used by legacy
+signing, rather than parsing an entire shared bundle as one leaf. Five checks
+passed each on 1.8.0 (`nebtest-841ddc3605`), 1.12.0 (`nebtest-604aad17c0`) and
+1.10.3 with an expired historical entry (`nebtest-8f95dea008`).
 
-H (confirmation/rollback), I (classified config reload) and J (fleet rotation)
-will be filled with actual branch heads and red/green evidence as implemented.
-Do not copy reference results into a submission as evidence of untested heads.
+## H onward
+
+- [H: confirmed activation and autonomous rollback](confirmed-activation.md)
+- [I: classified configuration reload](config-reload.md)
+- [Trust-only ordinary-role updates](trust-only-updates.md)
+- [Inline debug SSH keys](inline-debug-keys.md), independent of A–I
+- [J: fleet CA rotation](ca-rotation.md)
+
+The dependency index and current-versus-historical evidence are in
+[`../nebula-rotation-pr-series-plan.md`](../nebula-rotation-pr-series-plan.md).
+Review a focused diff with `git diff BASE..BRANCH`; use the listed immediate
+base, not upstream, to avoid including all prerequisite PRs. These are local
+drafts, not opened or approved upstream PRs.

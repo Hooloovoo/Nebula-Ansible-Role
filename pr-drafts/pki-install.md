@@ -32,11 +32,10 @@ Base: submitted PR #25 (`a0527eb`) for newer certificate JSON. Branch
 `pr/pki-install`, head `2d4b0c4`. Use `--scenario safe-pki
 --pki-mode install`, fresh and with an upstream+PR25 baseline.
 
-Reference evidence (not yet evidence for the extracted candidate): integrated
+Historical reference evidence (distinct from the actual candidate results below): integrated
 `8a2c46b` passed 137 safe-PKI and 77 restart assertions per release on 1.8.0 and
 1.11.2. Selector rehearsal on 1.8.0 passed 95 install-mode reload/rollback and
-60 install-mode IP/restart assertions. Include candidate red/green results,
-changed counts, hash/PID preservation and remaining gaps before submission.
+60 install-mode IP/restart assertions.
 
 Actual candidate: **98 reload/upgrade and 60 IP/restart assertions passed on
 each of 1.8.0 and 1.12.0**, using upstream+PR25 as baseline. Run IDs: 1.8.0

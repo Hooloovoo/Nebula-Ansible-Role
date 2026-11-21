@@ -1,627 +1,204 @@
-# Plan: CA rotation built from improvements to the normal role
+# CA rotation through focused improvements to the normal role
 
-## Active implementation ledger
+## Goal and working boundaries
 
-### Branch index (stacked bases; never force-pushed)
+Prepare small, independently useful local PR branches for
+`AndrewPaglusch/Nebula-Ansible-Role`. Certificate reconciliation, installation,
+activation, validation and recovery belong in the ordinary role. Fleet rotation
+adds sequencing and trust-transition gates while reusing that machinery.
 
-| PR | Branch / head | Base | Focus | Actual-head LXD evidence |
-|---|---|---|---|---|
-| prerequisite | `feature/cert-json-compat` / `a0527eb` | upstream `db0ebc4` | Submitted PR25 | Earlier matrix recorded below |
-| A | `pr/pki-install` / `2d4b0c4` | PR25 | Consumer-owned PKI transaction | 1.8.0 and 1.12.0: 98 reload/upgrade + 60 restart assertions each |
-| B | `pr/pki-in-place` / `2ef39af` | A | Pre-sign snapshot on CA-nodes | Red on A; green on 1.8.0/1.12.0: 42 reload/upgrade + 17 restart assertions each |
-| C | `pr/cert-subject` / `10415ae` | B | Subject independent of filename | Red then 5 green assertions on 1.12.0 |
-| D | `pr/ca-signing-inputs` / `b9504f4` | C | Isolated signer and supplied trust bundle | Red then 5 green assertions each on 1.10.3/1.12.0 |
-| E | `pr/staged-cert-signing` / `6719db2` | D | Verified staged reissue; preserve/localize keys | Red then 5 green assertions each on 1.8.0/1.12.0 |
-| F | `pr/lighthouse-cert-drift` / `eeb75c5` | E | Shared node/lighthouse reconciliation | Red then 6 green assertions each on 1.8.0/1.12.0 |
-| G | `pr/cert-issuer-drift` / `e9d397b` | F | Ordinary-role issuer convergence | Red then 11 green assertions on 1.12.0 |
-| H | `pr/confirmed-activation` (in progress) | G | Local rollback + management confirmation | Not yet verified |
-| I | planned `pr/config-reload` | H | Classified recoverable config reload | Not yet built |
-| J | planned `pr/ca-rotation` | I | Fleet gates reusing normal-role mechanisms | Not yet built |
+Reload when the complete change is supported; restart when necessary. Verify
+actual runtime state, not just file contents, a living PID or a refreshed-leaf
+log. Local certificate validity does not establish peer acceptance.
 
-The linear bases make integration reproducible; C and D can also be offered as
-independent cherry-pickable features if upstream prefers. Exact prerequisite
-decisions and test-stack heads must be stated in each draft, not guessed from
-feature names. Maintainer drafts are in `pr-drafts/`.
+Role READMEs describe end-user behavior and limits. Maintainer rationale,
+dependencies, tested versions and evidence live here, in `pr-drafts/`, and in
+`testing/lxd/verification.md`. These are local draft branches; do not push or
+open PRs without an explicit request.
 
-The integrated safe-PKI implementation is preserved at `8a2c46b`; the original
-complete regression suite is preserved at `8312726`. Extracted PRs must retain
-their combined behavior, including network-change restart/recovery. Do not
-rewrite those source branches while preparing review branches.
+## Current branch/dependency index
 
-The runner accepts `--scenario safe-pki --pki-mode install|in-place|combined`.
-This runs both existing PKI scenarios. Existing scenario commands default to
-combined. `--list-tests` previews runs without provisioning. Manifests record
-scope/completion; `assertions.json` records every named assertion. The
-`compare-pki-coverage.py` tool checks that install plus in-place equals combined,
-excluding topology-specific baseline checks. The 1.8.0 selector rehearsal
-retained all **211 acceptance assertions** (95+60 install, 39+17 in-place), with
-baseline checks passing separately. This tests the integrated role's selectors,
-not the as-yet-unbuilt extracted PR heads.
+| PR | Branch / head | Immediate base | Focus |
+|---|---|---|---|
+| prerequisite | `feature/cert-json-compat` / `a0527eb` | upstream `db0ebc4` | Submitted PR25 |
+| A | `pr/pki-install` / `2d4b0c4` | PR25 | Consumer-owned PKI transaction |
+| B | `pr/pki-in-place` / `2ef39af` | A | Pre-sign snapshot and CA-node recovery |
+| C | `pr/cert-subject` / `10415ae` | B | Subject independent of inventory filename |
+| D | `pr/ca-signing-inputs` / `6be8e73` | C | Isolated signer and supplied trust bundle |
+| E | `pr/staged-cert-signing` / `afad75e` | D | Verified staged reissue; retain/localize keys |
+| F | `pr/lighthouse-cert-drift` / `8639ca2` | E | Shared node/lighthouse reconciliation |
+| G | `pr/cert-issuer-drift` / `7d9e84f` | F | Ordinary-role issuer convergence |
+| H | `pr/confirmed-activation` / `71c7f94` | G | Local rollback and management confirmation |
+| I | `pr/config-reload` / `b3aefce` | H | Classified recoverable configuration reload |
+| trust-only | `pr/trust-only-updates` / `0a47ee2` | I | Distribute trust without reconciling leafs |
+| debug keys | `pr/inline-debug-keys` / `7b381d8` | PR25 | Inline debug SSH keys without a file registry |
+| integration base | `integration/rotation-base` / `df7a258` | trust-only + debug keys | Reproducible prerequisite merge |
+| J | `pr/ca-rotation` / `77dec86` | integration base | Fleet phases and trust gates |
 
-The role README describes end-user behavior, backup/rollback conditions and
-operational limits. Test matrices, dependencies, reviewer rationale and remaining
-evidence belong in draft PR descriptions and test evidence, not the role README.
+Worktrees are under `series/<feature>/`. Review the immediate-base diff with
+`git diff BASE..BRANCH`, not the cumulative diff from upstream. C/D may be
+offered independently if upstream prefers, after rechecking their prerequisites.
+The debug-key fix is independent; its integration enables the test probe, not a
+universal production dependency on Nebula's SSH console.
 
-Implementation order: A/B; subject handling; explicit signing inputs; staged
-key-preserving signing; lighthouse reconciliation; issuer drift; independent
-confirmation; classified configuration reload; fleet rotation. Each gets a
-branch, commit, red/green tests and draft PR description. The final stack must
-pass rotation over Nebula SSH and on 1.12.0 with PR #25. Branch heads/results
-will be indexed here as produced; proposed behavior is not verified in advance.
+### Preserved reference work
 
-## 1. Goal and design direction
+- `feature/safe-pki-apply`, `8fec782`, including the behavior fix `8a2c46b`.
+- Original complete regression reference `8312726`; split-selector/evidence
+  checkpoint `06dcac7` on `feature/lxd-regression-tests`.
+- `feature/ca-rotation` (`8c1febe`), `feature/ca-rotation-prototype` (`3ab337b`),
+  `feature/lxd-ca-rotation-tests` (`d99fe89`) and experimental rotation material.
 
-Deliver small, independently useful PRs to
-`AndrewPaglusch/Nebula-Ansible-Role`. Most of the machinery needed for eventual
-CA rotation should improve the regular role: certificate reconciliation, safe
-file installation, activation, verification and recovery. Full rotation should
-reuse those capabilities, with only fleet-wide sequencing and trust-transition
-state added later.
+Do not rewrite or delete these implementations to make the extracted series
+look smaller. The former detailed design is retained in this document's Git
+history at `06dcac7`; the active index replaces its obsolete “not yet built”
+status. Historical P IDs map to the implemented split: P2=C, P3a=A, P3b=B,
+P3c=H, P4=F, P5=E, P6=D+G+trust-only, A1=I and P7/P8=J plus acceptance.
 
-**Use SIGHUP when it can fully activate a change; restart when required.**
-Classify before activation. Do not try reload and infer success from a running
-PID or a fingerprint log: Nebula can reject part of a reload while Ansible
-reports success. IP renumbering is a confirmed example (§2).
+## Evidence ledger
 
-For identity-preserving CA rotation, the target is reload-only operation with
-measured connection continuity. This is not a promise that every ordinary role
-change can avoid interruption: IP, tunnel, listener and other restart-only
-changes need a restart, reconnection and a recoverable failure path.
+Results apply to the stated implementation/test revisions, not automatically
+to every later merge. [PR drafts](pr-drafts/series.md) and the
+[verification record](testing/lxd/verification.md) distinguish current-head
+compatibility checks, original focused runs and final integrated reruns.
 
-This is a design proposal, not an implementation brief. Variable names, task
-boundaries and the final rotation interface remain open until their supporting
-PRs are designed and tested. Prefer focused reviewable changes over arbitrary
-line-count caps; do not shrink a PR by leaving required failure paths unsafe.
-
-## 2. Evidence and current status
-
-The recorded LXD evidence is in
-[`testing/lxd/verification.md`](testing/lxd/verification.md). Results apply to
-the revisions and environments recorded there, not automatically to later code.
-
-| Area | Recorded result |
+| Scope | Completed evidence |
 |---|---|
-| Upstream foundation | PRs #23 (configurable CA host) and #24 (certificate groups/group firewall rules) are merged at baseline `db0ebc4`. |
-| JSON compatibility, PR #25 | Role `a0527eb`: certificate lifecycle passed 32 assertions per release on 1.8.0, 1.9.5, 1.10.0, 1.11.2 and 1.12.0 before suite extraction. |
-| Certificate-format upgrade | Extracted scenario passed 8 assertions for 1.8.0 → 1.11.2, preserving version-1 certificates, keys and groups. |
-| Safe-PKI core | Role `a577b2a` plus PR #25's lookups passed 137 assertions each on 1.8.0 and 1.11.2, including baseline upgrades, real systemd/journald, persistent TCP streams, fresh peer handshakes and rollback. |
-| Explicit PKI task files | Refactor `5570cc9` passed the same 137 assertions on both releases, including zero-change upgrades from `a577b2a`; snapshot, backup and restore no longer use `pki_phase`. |
-| Review hypotheses | Those runs demonstrate working snapshot/restore paths and fingerprint evidence with default text logging. They do not support the hypothesis that snapshot/restore always recurse as `apply`. |
-| Historical IP-change blocker | The reload-only revisions reported success while `neb0` retained the old address on 1.8.0 and 1.11.2. This is fixed by `8a2c46b`; retain the original failure evidence for comparison. |
-| Network-change activation | `8a2c46b` passed 77 IP/restart assertions and 137 existing safe-PKI assertions on each of 1.8.0 and 1.11.2. Includes prefix changes, runtime-drift repair, startup-failure rollback and zero-change upgrades from `5570cc9`. |
-| Firewall evidence | The earlier 1.11.2 run timed out after 28 passing checks; it is not a complete firewall pass. |
-
-The safe-PKI tests verify mismatched-key and wrong-CA rejection, byte-identical
-restoration, process preservation and backup cleanup, including in-place
-CA-node signing failures. They also show why `nebula -test` alone is insufficient:
-a matching certificate/key from an untrusted CA can pass configuration validation.
-
-**Not established by those runs:** full CA rotation;
-recovery after controller disconnection; watchdog/restart races; stopped-service
-signing recovery; alternate logging settings; fresh/unprovisioned check mode;
-mobile-app trust-bundle behavior. The safe-PKI fixture disables the connectivity
-check cron job. Its peer probes do not mean that the role probes peers itself.
-
-The previous plan reported additional standalone experiments involving overlap
-trust, certificate formats and `-in-pub`. Keep these as useful leads, not fresh
-LXD evidence. Reproduce the relevant behavior against each proposed PR. In
-particular, verify CA/leaf version and curve compatibility with the oldest
-participant, and do not introduce a certificate-format upgrade incidentally.
-
-## 3. Branches and test ownership
-
-| Branch/revision | Purpose |
-|---|---|
-| `feature/cert-json-compat`, `a0527eb` | Submitted PR #25; use the branch rather than the older four-case patch file. |
-| `feature/lxd-regression-tests`, `27f9306` | Updated base plus focused JSON and safe-PKI coverage (`d2279ae`, `27f9306`). |
-| `feature/safe-pki-apply`, locally `8a2c46b` | First-stage safe-PKI implementation, explicit-task refactor and tested IP-change/restart fix. Renumbering requires independent management; autonomous rollback after controller loss remains separate work. |
-| `testing/lxd-rotation-experiments`, `8a17e94` | Preserved experimental scenarios and helpers; source material for future PR-specific tests. |
-| `feature/lxd-ca-rotation-tests`, `d99fe89` | Earlier modular rotation suite; compare with experiments instead of importing both wholesale. |
-| `feature/ca-rotation` and personal infrastructure branches | Reference implementations and topology examples, not a required architecture or an approved emergency fallback. |
-
-Keep the general LXD suite aligned with submitted and upcoming role PRs. Add
-each independently useful behavior as its own scenario/commit. `auto` currently
-runs ordinary certificate, firewall and CA-host tests; upgrade and safe-PKI
-acceptance scenarios are opt-in. `all` includes `safe-apply-ip-change`, which
-now requires successful renumbering and startup-failure recovery. Older
-reload-only roles fail it; safe rejection is not a substitute for activation.
-
-The runner at `27f9306` defaults to 1.8.0 and 1.9.5. Keep its README and CLI
-consistent when deciding future defaults; newer-version and acceptance matrices
-should be explicit rather than silently multiplying the cost of default runs.
-
-## 4. Shared activation design
-
-### 4.1 Separate classification from activation
-
-PKI-specific and configuration-specific classifiers produce a small activation
-decision: **none**, **reload**, or **restart**, with a reason and the state that
-must be verified. Backup, activation and recovery mechanics are shared. A
-first-install/inactive-service path is separate from updating a running service.
-
-For combined changes, restart takes precedence over reload. When config support
-is added, classify against the complete proposed PKI/configuration state and
-activate once where practical. Do not scatter independent reload/restart
-decisions across copy tasks and handlers, or reload changed PKI against an old
-configuration and assume that proves the final configuration works.
-
-Initially config/unit/binary changes can retain the existing restart path;
-document and test mixed runs and handler behavior. Centralizing final activation
-must not silently expand the first PKI PR into a config-management rewrite.
-
-### 4.2 Initial PKI behavior table
-
-| Situation | Proposed behavior |
-|---|---|
-| No relevant content changes | No activation; fix owner/mode drift without an unnecessary restart. |
-| Certificate renewal, key replacement or groups change, with compatible unchanged certificate networks | Validate and SIGHUP; verify unchanged process and intended active certificate. |
-| Certificate IP/network changes | Validate and restart; verify intended tunnel addresses and fresh connectivity. Conservatively classify other network-related certificate differences until their reload support is tested. |
-| Trust-bundle changes | Validate trust and leaf/key consistency, then SIGHUP when supported; verify intended trust transition. Local certificate verification does not prove fleet trust. |
-| First deployment or inactive service | Validate what is available, install and start through the normal role path; do not pretend there was a running state to preserve. |
-| Combined PKI and restart-only change | Restart, with verification of the final state. |
-| Windows | Preserve existing behavior until separately implemented and tested. |
-
-Compare the **old live certificate** with the desired certificate, not just the
-new file or desired inventory variables. For a co-located signer/node, capture
-the old state before signing can overwrite it. Normalize version-specific JSON
-fields, but preserve distinctions such as network prefix lengths and certificate
-versions. Unknown or unreadable old state must not silently select reload.
-
-### 4.3 Transaction lifecycle
-
-1. Inspect current files, metadata, configuration, service and effective identity.
-2. Prepare proposed files and classify the complete change without altering the
-   running inputs. Record the chosen activation reason.
-3. Save recoverable originals and metadata in a root-only transaction directory.
-   Keep key backups as remote files, not Ansible variables. Choose a location
-   with defined permissions, retention and interrupted-run recovery; a directory
-   under `nebula_config_dir` is a candidate, not a substitute for recovery logic.
-4. Validate the proposed certificate against the intended trust bundle and
-   validate the complete proposed configuration/PKI. Publish only validated
-   inputs where practical; maintain a final pre-activation consistency check.
-5. Arm independent local rollback before any operation that could sever the
-   management connection. Install the related files and perform the chosen
-   activation.
-6. Verify local runtime state and confirm the management path where required.
-7. Commit/confirm the transaction and remove backups and rollback scheduling.
-8. On failure, restore all affected files and metadata, reactivate the old state
-   using the appropriate operation, verify recovery, and fail with a useful cause.
-
-Multiple file copies are **not an atomic set**. Per-file rename alone does not
-make cert/key/config publication atomic either. Define how signing, handlers,
-the role's connectivity watchdog and other role-managed writers are coordinated;
-test the relevant races. Preserve the good configuration when input validation
-fails, and recover partial publication or signing failures.
-
-Use `no_log` for private-key content and secret-bearing tasks. Retain bounded,
-non-secret validation diagnostics; do not hide every failure behind `no_log`.
-Check/diff mode must not install files, arm rollback, signal services or disclose
-keys. Test provisioned and unprovisioned paths separately.
-
-### 4.4 Verification and recovery are operation-specific
-
-- **Reload:** active service, same process, evidence of the intended loaded
-  certificate/settings/trust, and no relevant reload errors. Check all applicable
-  errors: the known network-rejection message is not covered by the current
-  two PKI-load-error strings. Logs are supporting signals, not sole proof.
-- **Restart:** active new service process, intended effective addresses/listeners
-  or settings, and fresh overlay/management connectivity. PID change alone is
-  insufficient. Existing connections may be interrupted; say so explicitly.
-- **Restore after reload:** reload the restored state when compatible, otherwise
-  restart if recovery requires it. Do not promise original-PID preservation for
-  every recovery case.
-- **Restore after restart:** restore and restart again; verify the previous
-  working identity and connectivity, not preservation of the original PID.
-
-Ordinary role runs must not impose ICMP reachability as a universal prerequisite:
-deployments may deliberately deny ping. Define confirmation using the actual
-management path or an explicit supported probe. A successful established tunnel
-does not prove a fresh handshake or newly loaded trust.
-
-**Local validity is not peer acceptance.** A leaf signed by the selected CA may
-pass this host's verification, configuration validation and activation checks
-while another required peer still trusts only the old CA. Our existing positive
-LXD handshake checks use compatible peer trust; they do not cover that ordering
-mistake. A reviewer reports that reissue triggers re-handshakes and that issuer
-rejection is logged on the rejecting peer, while the updated node may show only
-retries/`Handshake timed out`. Record the tested releases, commands and logs when
-reproducing this; do not treat the report as additional completed LXD evidence.
-
-A future peer-confirmation check must observe a newly completed Nebula handshake
-with the intended peer and certificate/issuer, not merely SIGHUP, an existing
-tunnel or an already-open SSH connection. Capture logs on both endpoints after
-the operation. A timeout is an activation/confirmation failure but is not by
-itself proof of a trust error: transport and firewall failures can look similar.
-One successful peer cannot establish fleet-wide trust. Keep this limitation
-explicit in P3; require the complete participant trust gates in P7/P8.
-
-Ansible `rescue`/`always` cannot be the only rollback mechanism when restarting
-Nebula can disconnect its own controller. A local timed, transaction-identified
-rollback must survive controller loss, avoid racing with confirmation or later
-runs, and clean up or report interrupted transactions. A restart-only path that
-cannot yet recover over overlay SSH must be explicitly limited to a verified
-independent management path rather than advertised as safe over Nebula.
-
-### 4.5 Explicit task files before new activation behavior
-
-The structural refactor is implemented in `5570cc9`, preserving the existing
-activation behavior so it can be reviewed independently of the upcoming
-reload/restart changes. It replaces `pki_phase` and recursive calls to
-`install_pki.yml` with explicit includes:
-
-| Task file | Responsibility |
-|---|---|
-| `pki_snapshot.yml` | Initialize transaction facts, inspect original file/process state, and request backups before in-place signing. |
-| `pki_backup.yml` | Create the root-only backup directory and copy original files remotely; shared by snapshot and ordinary apply. |
-| `install_pki.yml` | Compare original and desired/current hashes, back up ordinary changed files, install, validate and activate. |
-| `pki_restore.yml` | Restore original files/metadata, remove files originally absent, and reactivate the restored state without starting a new transaction. |
-
-The backup helper is shared because ordinary installation must defer backup
-creation until it detects changes, while in-place signing needs backups before
-the signer modifies live files. No-op ordinary installations must not create
-backups. Check mode must not create them in either path.
-
-The node's in-place signing block owns snapshot → signing → apply, restoration
-on failure, and final cleanup. Ordinary `install_pki.yml` owns its own transaction.
-An inner apply must not delete the outer signing snapshot. Reset transaction
-facts at the start of a new snapshot so a previous include's backup/process
-state cannot be reused accidentally. Preserve useful failure diagnostics during
-recovery; a restore failure must not masquerade as successful restoration.
-
-Keep `pki_in_place` as an operation flag, not a hostname test in the shared
-installer. Its meaning is: signing has already modified these live PKI files,
-so compare pre-signing and current hashes. The node caller currently derives
-that flag from `inventory_hostname == nebula_ca_host`; future staged signing
-on the same host need not use in-place mode.
-
-The file split passed the existing reload/rollback suite (137 assertions each
-on 1.8.0 and 1.11.2), including a zero-change upgrade from the pre-refactor role.
-The follow-up `8a2c46b` adds network-based restart classification and fixes IP
-renumbering, with a further 77 dedicated assertions per release. It does not
-provide autonomous rollback after controller loss. See the verification record
-for the original defect, successful fix, commands and test-stack prerequisites.
-
-## 5. Proposed PR sequence
-
-The IDs retain continuity with the previous plan, not fixed implementation
-boundaries. P0 evolves alongside each PR; tests are not postponed to the end.
-
-| PR | Independently useful scope | Acceptance/dependencies |
-|---|---|---|
-| P0 | General LXD regression foundation and scenario ownership | Already integrated; maintain exact revision/results records and visible negative cases. |
-| P1 | Certificate JSON compatibility | Submitted PR #25. Only two IP alternatives are needed: `details.ips[0]` through 1.9.x, `[0].details.networks[0]` from 1.10.0. Keep the object/array groups lookup. |
-| P2 | Explicit certificate subject independent of inventory/file name, if needed | Preserve existing subjects on reissue; no blanket name-drift regeneration. Establish this before re-signing deployments whose subject names differ from inventory names. |
-| P3a | Safe PKI transaction with reload/restart classification | Network classification and local restart/recovery implemented in `8a2c46b`. Continue review against §4 without claiming connection-independent recovery. Requires P1 when testing newer releases. |
-| P3b | Same guarantees for CA-host-as-node signing | Already partly implemented/tested in the current branch; retain or split only if each proposed PR is safe alone. Snapshot before mutation; later staged signing removes the delete-before-create window. |
-| P3c | Connection-independent confirmation/rollback | Develop with P3a's restart path where needed. Reusable for firewall changes and rotation. Must precede claims of safe restart over overlay SSH; do not defer a required recovery mechanism merely to keep P3a small. |
-| P4 | Shared signing/reconciliation for node and lighthouse | Lighthouse IP/groups and later issuer drift need an ordinary-role path. Preserve default rendering/identities; explicitly document newly detected lighthouse drift. Depends on safe activation and subject handling where needed. |
-| P5 | Staged re-signing with existing keys | Preserve key identity and avoid deleting good files before signing/validation. Prefer existing `nebula-cert` capabilities; add a filter only if justified. Test key/public-key consistency, curves, old releases and fresh issue separately. |
-| P6 | Explicit signing identity, trust bundles and issuer drift | Use the ordinary role to converge to an intended signer while distributing overlap trust. Validate signer/key match and preserve unrelated trust. Depends on shared signing and safe activation. |
-| P7 | Minimal fleet rotation sequencing and gates | Reuse the regular role; finalize the interface only after prerequisites settle. Depends on P1/P3–P6, required identity handling and demonstrated local recovery. |
-| P8 | End-to-end rotation acceptance | Built alongside P7 and a merge gate for it, not a follow-up after shipping rotation. |
-
-### P3 priorities before proposing safe-PKI upstream
-
-- Prepare an install-mode PR and a dependent in-place CA-node PR from a common
-  tested base, rather than presenting the whole integration branch as one small
-  patch. Keep the integrated branch and its protections intact while extracting
-  the review branches; do not rewrite or remove tested work merely to reduce
-  the diff. The first PR must state its excluded CA-node behavior, preserve that
-  path's baseline semantics, and pass its own baseline/failure tests. The second
-  must add snapshot-before-sign ownership and in-place failure coverage. Re-run
-  tests on each actual PR head, not only on their combined stack.
-- Keep the README behavior-first and concise. Internal helper dispatch belongs
-  in task comments/the design plan, not explanatory leftovers such as "No phase
-  selector is needed". State local-validation and peer-trust limits prominently.
-- Keep the tested task-file refactor in §4.5 separate from the upcoming behavior
-  changes. Preserve its ordinary/in-place caller, check-mode, restoration and
-  cleanup coverage; add targeted same-play repeated-include and recovery-failure
-  tests where the next transaction changes introduce new state/lifetime risks.
-- The IP-change fix and strict acceptance test are complete for the tested
-  independent-management cases (`8a2c46b`): successful address/prefix changes,
-  new PID and fresh handshake, no-op/check mode, stale-runtime repair and
-  injected restart-failure recovery for nodes, CA-nodes and lighthouses.
-- Preserve that strict test contract. Do not count rejection as successful
-  renumbering or weaken actual tunnel/handshake assertions to file-only checks.
-- Keep the passing reload, wrong-CA, mismatched-key, interrupted signing and
-  baseline-upgrade and restart-failure coverage. Add management interruption,
-  watchdog coordination and fresh check-mode cases before claiming those paths.
-- Distinguish first deployment/inactive-service handling from recovery of an
-  existing running host; avoid promising protection never implemented or tested.
-
-### P3 review boundary: who modifies the live files?
-
-- **PR A / install mode:** applies proposed files to a consumer that has not
-  already been changed by signing (non-CA nodes and separate-CA lighthouses).
-  Its shared helpers need no in-place dispatch. Preserve the legacy same-host
-  caller path explicitly rather than relying on an empty changed set to exclude
-  it: runtime-address reconciliation can require activation even when file
-  checksums match. Retain network/prefix restart classification, actual address
-  verification and restart-aware restoration; a reload-only extraction would
-  reintroduce the demonstrated regression. Applying all files before validation
-  is not atomic publication against concurrent readers/restarts.
-- **PR B / in-place mode:** adds the pre-sign snapshot and caller-owned recovery
-  around signing, then compares that snapshot to post-sign metadata and reuses
-  A's activation path. It must handle both reload and restart, not just reload.
-  Avoid rewriting the already installed content where unnecessary, while
-  deciding explicitly how existing metadata correction and check mode behave.
-  A hostname equality test selects this current caller path, but the shared
-  operation flag still means "signing already changed these files".
-  Define no-drift behavior precisely: the current in-place path can create and
-  remove a pre-sign backup even when no signing occurs. Its no-op tests establish
-  zero reported changes, unchanged PKI/PID and no HUP, not absence of temporary
-  backup work.
-- "No new variables" should mean no new user-facing settings without a reason;
-  internal snapshot/transaction outputs are still needed. No signing changes
-  belong in A merely to accommodate B. Peer-trust confirmation is a separate
-  activation/rotation concern shared by both modes.
-- Neither branch is merely mechanical: A changes running-service activation,
-  validation and recovery; B adds a transaction spanning the signer. Preserve
-  diagnostic evidence when recovery fails and do not blindly delete the only
-  recovery copy just to satisfy an "always clean up" slogan.
-
-The existing LXD runner is on `feature/lxd-regression-tests`, commit `8312726`:
-[`testing/lxd/run.py`](testing/lxd/run.py) (`safe_apply()` and
-`safe_apply_ip_change()`), with test-only inputs in
-[`testing/lxd/safe-apply.yml`](testing/lxd/safe-apply.yml). The first method's
-node/lighthouse cases cover A, and its CA-node section covers B; the IP method
-also mixes both modes. These are integration scenarios, not independently
-selectable A/B suites yet. Split their selection with the PR extractions so A
-does not fail on deliberately excluded B behavior or silently skip required A
-checks. Run each extracted head fresh and against its appropriate baseline.
-
-Current gaps for the proposed split include an explicit unpatched-master
-CA-node reproducer observing the certificate actually presented on a fresh
-handshake, a separately forced `nebula -test` failure with otherwise valid input,
-and the negative peer-trust case in P8. Key mismatch already exercises a real
-configuration/key-pair validation failure; wrong-CA tests reject locally and do
-not substitute for peer rejection of a locally valid new issuer.
-
-### A1 — Config classification using the same transaction
-
-This is the next generally useful feature after safe-PKI activation stabilizes,
-not something that must wait for full CA rotation.
-
-- Compare parsed old/proposed configuration, not textual YAML. Define how
-  missing values, defaults, deletions, nested mappings and ordered lists compare.
-- Reload only when **every changed setting is on a version-tested allow-list**.
-  Restart for known restart-only settings, unknown settings or uncertain
-  classifications. A change in a reloadable section does not automatically make
-  every nested setting reloadable.
-- Candidate reloadable settings from earlier experiments include selected
-  firewall, logging, lighthouse-list/interval, `preferred_ranges` and
-  `punchy.respond` settings. These are investigation targets, not an approved
-  blanket allow-list. Handle `pki` through its PKI-specific classifier.
-- Candidate restart-only settings include `listen.port`, `listen.host`, tunnel
-  device/MTU/enabled state, cipher and process-role changes; confirm exact paths
-  and behavior on supported releases. Test settings that are silently ignored
-  by SIGHUP as well as those that emit errors.
-- Classify mixed PKI/config changes together; restart wins. Validate the final
-  proposed configuration and avoid duplicate end-of-play handler activation.
-- Firewall/management-path changes require local timed rollback and explicit
-  confirmation even when SIGHUP preserves the PID: a healthy daemon can apply
-  a rule that blocks the controller. `serial: 1` limits fleet exposure but cannot
-  recover the host that just became unreachable.
-
-Other independent improvements: secret transport/logging hardening, documented
-configuration fidelity options and eventual default-version updates. Do not
-make unrelated defaults or rendering changes a prerequisite for this series.
-
-## 6. Signing, identities and trust conventions to settle
-
-### 6.1 Keep signing identity distinct from distributed trust
-
-The previous plan required the signing CA to be first in `ca.crt`. That may be
-a compatibility convention for a CLI that reads the first certificate, but it
-should not be the only candidate design. Prefer an explicit single signing
-certificate/key input and an independently distributed trust bundle if that
-fits a small backward-compatible PR. Preserve existing default paths; do not
-replace a deployed `ca.crt` layout without a migration procedure.
-
-Validate signer/key consistency before issuing anything. Derive issuer drift
-from the selected signing certificate fingerprint, not an arbitrary trust-bundle
-entry. A bundle-order change alone must not unintentionally change the signer.
-Test multi-CA bundles, expired historical entries and unrelated valid CAs; retain
-unrelated trust unless explicitly selected for retirement.
-
-#### Version-specific expired-CA bundle contract
-
-A controlled LXD probe identified the difference specifically in
-`nebula-cert verify -ca supplied.bundle -crt leaf.crt`, using the same version-1
-leaf signed by a valid intended CA and the same expired historical CA. Both
-expired-first and expired-last orders were tested:
-
-| Operation on valid intended CA + expired historical CA | 1.10.3 | 1.11.2 |
-|---|---|---|
-| `nebula-cert verify` | Exit 1: `historical: certificate is expired` while adding the CA to the pool | Exit 0 |
-| `nebula -test` | Exit 0 | Exit 0 |
-| Daemon startup with real TUN | Starts; expired-CA warning | Starts; expired-CA warning |
-| SIGHUP from a valid-only bundle | Stays running; expired-CA warning, no CA-load error | Stays running; expired-CA warning, no CA-load error |
-
-On both releases an expired-only or malformed bundle fails configuration
-validation and startup. Reloading either invalid input leaves the process alive
-and logs `Failed to load ca from config`, even though a certificate-refreshed
-message also appears. Process survival and a leaf fingerprint are not proof that
-the intended trust change was accepted.
-
-The reproducible probe passes 68 operation-specific assertions; see
-[`testing/lxd/expired-ca-verification.md`](testing/lxd/expired-ca-verification.md)
-for fixtures, exact commands and scope. These are binary/process observations,
-not a fresh-handshake or full-role result. Do not infer a release cutoff or
-claim that expired CA certificates become valid trust anchors in 1.11.2.
-
-Keep three independent test contracts:
-
-- **Supplied runtime bundle:** retain the per-operation/version expectations
-  above. `nebula-cert verify` in 1.10.3 must not be treated as equivalent to that
-  daemon's bundle-loading behavior. Unknown releases need their own evidence.
-- **Signing:** select the intended single CA certificate and matching key;
-  historical or unrelated trust entries must not select the signing identity.
-- **Leaf verification:** verify against an isolated intended CA, and assert the
-  expected issuer fingerprint. Acceptance of a broader runtime trust bundle
-  must not let an unintended signer satisfy this check.
-
-Include a valid intended-CA control alongside the expired historical entry so a
-negative result is attributable to bundle handling, not a broken fixture. Keep
-the supplied bundle intact for its compatibility test; isolate signing and leaf
-verification inputs separately rather than silently filtering the tested bundle.
-
-### 6.2 Preserve identities without forcing a representation
-
-Inventory hostname, certificate subject, file basename and service identity are
-different concepts. Preserve existing subjects, networks/prefixes, groups and
-keys during identity-preserving CA migration. Avoid silent mass regeneration
-when introducing a subject override or lighthouse drift detection.
-
-P5 must update the distribution path as well as signing before claiming that
-keys no longer travel after first issue. `-in-pub` alone does not remove the
-existing key `slurp`/copy operations. Staging plus rename protects one file;
-multi-file fresh issuance still needs transaction coordination.
-
-Keep certificate version, curve and restrictions compatible with every
-participant, including mobile/packaged clients. Verify format compatibility
-separately from binary JSON compatibility. Preserve the old format by default
-unless an explicit, tested format migration is intended.
-
-## 7. Eventual rotation workflow (proposed, not implemented here)
-
-Rotation is a trust transition across the fleet, not just changing `ca.key` and
-rerunning a play. Ordinary-role mechanisms handle each host; orchestration must
-establish the fleet-wide invariants before changing the active signer or
-retiring trust. A state file records progress but is not proof of loaded state.
-
-| Phase | Intended action | Gate |
-|---|---|---|
-| Prepare | Stage a new CA with compatible version/curve/restrictions; distribute old+new trust without changing the signer or leaf identities. | Every required participant has loaded overlap trust before migration. Include unmanaged clients in preparation or define how they are excluded from availability claims. |
-| Migrate | Select the new signer; reconcile leaf issuer drift using existing keys; verify one host at a time through the ordinary role. | Every required participant presents the intended new-CA certificate on a fresh handshake; identity and key preservation verified. |
-| Finalize | Retire only explicitly selected old CA fingerprints, retaining unrelated trust; confirm each host. | Old-CA-only peers are rejected on fresh handshakes; new peers connect; no required participant still depends on retired trust. |
-| Revert/resume | Use explicit persisted state plus fresh evidence to restore or continue a partially completed transition. | Establish overlap on affected participants before switching issuers back; never assume a state marker or archived key makes reversal safe. |
-
-Proposed ordering uses serialized activation with fatal fleet gates. Determine
-signer/controller/lighthouse ordering from the topology and management paths,
-not a universal "controller last" rule. Keep fleet-wide phase completion separate
-from per-host activation and make interruption/resumption idempotent. Decide
-whether partial host selection is rejected or explicitly supported with a
-validated complete participant set; do not rely on `serial` as a trust gate.
-
-Unmanaged clients need both preparation and migration procedures. A phone must
-receive overlap trust before peers start presenting new-CA certificates if it
-is to stay connected; it is not sufficient to update it only before finalization.
-Sleeping/offline clients block completion unless explicitly retired from the
-participant set. Test the actual app's import and bundle support.
-
-Default cleanup must distinguish obsolete CA signing keys and cached peer keys
-from each running host's own required private key. Define archival permissions,
-retention and recovery policy; do not automatically keep old signing keys forever
-or prune unrelated/expired CAs as a side effect of rotation.
-
-Do not promise automatic recovery after finalization: restoring old trust is
-itself a coordinated trust transition. Likewise, overlap reduces issuer-mismatch
-risk but does not guarantee connectivity during arbitrary failed operations.
-
-## 8. Verification strategy
-
-Use fast syntax/targeted unit checks where appropriate, then real LXD VMs for
-systemd, journald, interfaces and traffic. Shims can support development but
-cannot establish restart/connection recovery. Test documented migration steps
-literally, including preservation of signer and leaf certificate/key hashes.
-
-### Matrices and baseline upgrades
-
-- Certificate JSON compatibility: 1.8.0, 1.9.5, 1.10.0, 1.11.2 and 1.12.0.
-- Safe-PKI target matrix: 1.8.0, 1.9.5, 1.11.2 and 1.12.0; current completed
-  integrated evidence is 1.8.0 and 1.11.2 only. Add mixed signer/target versions
-  such as 1.10.3/1.11.2 when the relevant PR introduces that requirement.
-- Apply changed defaults/templates to a baseline deployment. Require zero
-  incidental file changes, reloads or restarts where behavior is unchanged.
-- Keep certificate-format upgrade tests separate from normal fresh issuance.
-- Record role/test revisions, Ansible/collection versions, exact commands,
-  completed assertions, failure paths, cleanup and untested combinations.
-
-### Activation tests
-
-- No-op: file hashes and PID unchanged, no activation-related journal events;
-  Ansible reports no changes. Ordinary traffic logs may still appear.
-- Reload: intended certificate/settings active, same PID, persistent TCP stream
-  survives without a reconnection path, then a fresh peer handshake succeeds.
-- Restart: intended address/listener active and new process; management reconnects
-  at the intended endpoint. Report the expected interruption rather than imposing
-  reload's continuity assertion on restart-only changes.
-- Combined changes: one effective activation decision; final-state validation;
-  handler behavior correct. Unknown config keys conservatively select restart.
-- Invalid/missing configuration: fail before replacing good state where possible.
-  Inject key mismatch, wrong CA, invalid config, restart failure and partial
-  signing/publication failures; verify restored content and metadata.
-- Controller loss: local rollback restores reachability without relying on the
-  dead SSH session; confirmation cannot race or cancel another transaction.
-- Watchdog/concurrent-writer cases; first deployment, inactive service and
-  provisioned/unprovisioned check/diff behavior; no key leakage or stale backups.
-
-### Full rotation acceptance (P8)
-
-- Exercise overlap, migration and retirement over Nebula SSH on real VMs;
-  measure long-lived streams/session continuity for the reload-only workflow.
-- Force fresh handshakes after each phase; prove the expected peer issuer and
-  trust behavior, including old-CA rejection after retirement and recovery after
-  restoring the intended peer certificate. File contents plus ping alone do not
-  prove all CAs are loaded, and an existing tunnel may hide stale trust.
-- Add the missing negative peer-trust case: let a node trust old+new, give it a
-  locally valid new-CA leaf, and leave a required peer trusting only old. Prove
-  local validation can pass while a newly attempted handshake fails; collect
-  both endpoints' evidence and require the rotation gate to stop. Then load
-  overlap trust on the peer and require a newly completed handshake. Reproduce
-  and record version-specific handshake/re-handshake signals before using them
-  as production confirmation criteria.
-- Preserve semantic name/networks/groups, certificate format as intended, and
-  private-key hashes. Require hash preservation of unchanged files; do not
-  demand byte-identical certificates after intentional reissue.
-- Repeat each phase with no changes; interrupt and resume phases; reject unsafe
-  progression with offline or unacknowledged participants; test staged revert.
-- Cover default CA/lighthouse, separate signer and CA-node topologies, plus an
-  unrelated valid CA and an expired historical entry in the initial bundle.
-- Investigate `pki.disconnect_invalid` and established-tunnel behavior on trust
-  retirement before making uninterrupted-connectivity claims for that case.
-
-## 9. Immediate next steps and working method
-
-1. Keep P1 focused on PR #25 and preserve its recorded compatibility evidence.
-2. Review the completed explicit-task refactor (`5570cc9`, §4.5) and its passing
-   syntax, baseline-upgrade and LXD reload/rollback evidence before building
-   activation-classification changes on top.
-3. Review `8a2c46b` and the strengthened IP-change evidence. Keep its
-   independent-management requirement explicit. Update any remaining
-   "reload, never restart" briefs to reflect classification, runtime-address
-   verification and operation-specific recovery.
-4. Decide the smallest safe split for P3a/P3b/P3c; preserve already tested CA-node
-   protections. Review recovery over overlay SSH before enabling restart there.
-5. Complete the targeted matrix and baseline/failure cases for the proposed
-   change; update `testing/lxd/verification.md` with actual results.
-6. Submit the generally useful safe-PKI behavior first; design config
-   classification against the same transaction interface as the next feature.
-7. Extract signing, identity and trust improvements from the rotation branches
-   as their contracts settle, with PR-specific tests on the general LXD branch.
-8. Add fleet rotation orchestration and full acceptance only after prerequisites
-   work through ordinary role runs. Rehearse the actual topology and documented
-   workflow before a production rotation.
-
-For each PR: specify behavior and dependencies, separate compatibility changes
-from intentional behavior changes, review failure detection and secret handling,
-run appropriate tests, and report what was not verified. Keep scope small through
-independent features rather than unsupported numeric size estimates or claims
-about upstream appetite. Do not push or open PRs without an explicit request.
-
-## Appendix: reuse candidates from the rotation work
-
-| Existing material | Candidate destination |
-|---|---|
-| `rotation_install.yml` and watchdog logic | Shared transaction/confirmation ideas for P3 and A1; do not copy a parallel installer wholesale. |
-| `rotation_leaf.yml`, public-key helpers | P5 staged key-preserving signing and identity checks; verify CLI/version behavior before introducing filters. |
-| `rotation_ca.yml`, key-promotion tasks | P7 CA preparation and selected-signer transition after P6 defines signing/trust inputs. |
-| Trust-bundle and signer-bundle helpers | P6/P7 normalized fingerprints and preservation of unrelated trust; ordering only where explicitly required by the chosen CLI interface. |
-| Leaf/key verification and phase guards | Ordinary-role verification where general; fleet invariants in P7/P8. |
-| Rotation playbooks/docs | Rehearsal and test material; final interface need not match their names or file structure. |
-| Experimental and modular LXD suites | Extract non-duplicated cases per supporting PR; retain original branches until replacement coverage is demonstrated. |
-
-No existing implementation is retired solely because a plan says its replacement
-will be smaller. Archive it when equivalent required behavior is implemented,
-tested and its useful evidence preserved.
+| PR25 | 32 lifecycle assertions each on 1.8.0, 1.9.5, 1.10.0, 1.11.2 and 1.12.0; separate 8-assertion 1.8.0→1.11.2 format-preserving upgrade |
+| Original network fix `8a2c46b` | 137 PKI + 77 IP/restart assertions each on 1.8.0/1.11.2, including zero-change adoption |
+| A `2d4b0c4` | 98 reload/upgrade + 60 IP/restart assertions each on 1.8.0/1.12.0 |
+| B `2ef39af` | Red on A; 42 reload/upgrade + 17 IP/restart assertions each on 1.8.0/1.12.0 |
+| C `10415ae` | Focused red/green, 5 assertions on 1.12.0 |
+| D `b9504f4` | Red/green, 5 signer checks each on 1.10.3/1.12.0, including expired historical trust before the selected signer |
+| D `6be8e73` | Legacy follow-up: 5 each on 1.8.0/1.12.0; 5 with expired historical trust on 1.10.3; 6 unit tests |
+| E implementation | Red/green, 5 each on 1.8.0/1.12.0 |
+| E `afad75e` | 5 staged-signing checks on 1.12.0; 5 expired shared-bundle checks on 1.10.3 |
+| F implementation | Red/green, 6 each on 1.8.0/1.12.0; current head merges E's follow-up |
+| G implementation | Red/green, 11 on 1.12.0 |
+| G `7d9e84f` | Legacy follow-up: 5 each on 1.8.0/1.12.0; 5 expired shared-bundle checks on 1.10.3 |
+| H `509cdf7` | 7 controller-kill/watchdog assertions on 1.12.0; 7 transaction unit tests |
+| I implementation | 8 focused assertions each on 1.8.0/1.12.0; 4 classifier unit tests |
+| Trust-only implementation | 3 focused assertions on 1.12.0 |
+| Debug-key fix | Focused red/green on 1.12.0 |
+| J `e3e094b` | 57 SSH rotation + 11 SSH recovery; 137 PKI + 77 IP + 32 certificate + 39 firewall + 28 CA-host assertions on 1.12.0 |
+| Current J `77dec86` | 21 unit tests pass; post-compatibility integrated reruns are tracked in the verification record |
+
+The selector rehearsal against `8a2c46b` proved install + in-place retains all
+**211** combined acceptance assertions, excluding topology-specific baseline
+checks. Eight fast selector/comparison tests passed. Each extracted A/B head
+subsequently passed its own actual-head matrix; that is separate evidence from
+the lossless-selection rehearsal.
+
+## Contracts retained by the split
+
+### Installation and activation
+
+- A owns consumer installation, with the baseline same-host signing path
+  preserved. B snapshots before a co-located signer mutates live state and owns
+  recovery across signing and installation. An inner apply must not destroy the
+  outer snapshot. No-op counts do not imply no temporary snapshot work.
+- Compare old live networks/prefixes/unsafe networks and actual tunnel addresses.
+  Restart changed networks or stale runtime addresses; compatible renewal,
+  groups, keys and trust can reload. Unknown old state must not silently choose
+  reload. Check intended interface addresses after activation.
+- Recovery after a failed attempted restart restores and restarts; preserving
+  the old PID is not a valid requirement for that path. Renumbering can interrupt
+  connections. Early A/B evidence uses independent LXD management.
+- Preserve useful failure diagnostics and recovery copies when restoration is
+  incomplete. Key mismatch, wrong CA, startup failure and interrupted local
+  signing must preserve/restore the working files and runtime state.
+- H arms host-local systemd rollback before mutation and serializes publication,
+  confirmation and rollback using a per-service transaction and lock. Controller
+  rescue is not the only recovery mechanism. Confirmation cannot commit an
+  expired transaction or cancel a different transaction's timer.
+- Multi-file publication is **not atomic**. First installation/inactive service
+  is distinct from protecting a running deployment. Test secrets must not enter
+  shared logs; keys stay in root-only remote snapshots.
+- Provisioned check/diff must not change deployed files, arm rollback or signal
+  services. Unprovisioned check mode, reboot races and arbitrary external writers
+  remain separate verification targets.
+
+### Configuration
+
+I compares parsed mappings. Only changes wholly within firewall inbound/outbound
+rules are on the tested reload allow-list. Unknown or mixed settings restart;
+restart wins for incompatible combined PKI/configuration changes. Do not expand
+the allow-list to logging, lighthouse settings or other candidates without
+release-specific evidence. Preserve default rendering and avoid duplicate
+end-of-play activation. Firewall reloads can block Ansible despite a healthy PID;
+the same deadline and confirmation path must protect them.
+
+### Signing, subjects, keys and bundles
+
+- Inventory name, certificate subject, file basename and service name differ.
+  C adds an explicit subject without changing canonical filenames or forcing
+  subject-only reissue. F intentionally starts correcting lighthouse IP/group
+  drift; users must have correct desired values before adoption.
+- E stages issue and verification before publication, reuses the existing public
+  key, and avoids retransferring an existing Linux consumer's private key. First
+  issue still needs a matching key. Public-key preservation alone is insufficient
+  if old slurp/copy paths keep transporting private material.
+- D separates signer certificate/key inputs from distributed trust. Explicit
+  signer input must be a single public CA. Existing shared default paths retain
+  first-CA signing and distribute the entire bundle unchanged. Isolate that CA
+  for verification/metadata; never parse an old multi-document JSON bundle as a
+  single certificate or treat unrelated trust as the intended issuer.
+- G detects issuer fingerprint drift. Operators must load overlap before
+  switching signers; ordinary reconciliation does not establish fleet readiness.
+- Trust-only updates preserve existing leaf identity even after partial migration.
+  Certificate format/curve and restrictions must remain compatible with the
+  oldest required participant; binary JSON compatibility is a different concern.
+
+The [68-assertion expired-CA binary probe](testing/lxd/expired-ca-verification.md)
+pins an important version distinction: 1.10.3 `nebula-cert verify` rejects a
+valid+expired bundle, while 1.11.2 accepts it. Both tested daemons accept that
+mixed bundle at `-test`, startup and HUP with an expired-CA warning. Invalid-only
+trust fails validation/startup, but HUP can leave a process alive and log a
+refreshed leaf while rejecting CA loading. Keep runtime bundle policy separate
+from isolated intended-signer verification; do not silently prune test bundles
+or infer an untested version cutoff.
+
+## Implemented fleet workflow
+
+J's [end-user procedure](series/ca-rotation/docs/ca-rotation.md) uses a stable
+rotation ID and the complete `nebula_rotation` participant set:
+
+1. **Prepare:** create a compatible successor and distribute overlap through
+   trust-only ordinary-role updates. Record confirmed bundle/process/boot state.
+2. **Migrate:** require confirmed overlap everywhere, validate the successor key,
+   promote stable signer inputs and reconcile issuers serially using existing keys.
+3. **Finalize:** require new issuers and fresh management confirmation everywhere,
+   then retire only the selected old CA, preserving unrelated/historical trust.
+
+Limited/check-mode execution, mismatched keys, incomplete/stale confirmation and
+reuse of an ID with a different CA pair are rejected. Operator attestations are
+required for unmanaged clients' overlap and identity migration; they are not
+automatic app checks. Required offline participants block phase completion.
+
+Persistent SSH and fresh-handshake proof serve different purposes. The test
+controller's probe verifies a new tunnel index and the exact expected leaf
+fingerprint. A pre-existing tunnel or one successful peer does not establish
+fleet-wide trust. Negative tests must retain working controls and actual peer
+rejection of a locally valid but untrusted issuer.
+
+Reuse an ID to resume a phase and revalidate state. There is no automatic fleet
+reversal: earlier completed participants are not undone when a later host fails.
+Retirement reversal is itself a coordinated trust transition. Preserve pending
+recovery snapshots. After the site's recovery-retention period, distinguish old
+archived signing keys and cached peer keys from the active signer and each
+running host's own required private key.
+
+## Current completion work and future verification
+
+1. Finish final-stack reruns after the legacy bundle fix; record partial,
+   infrastructure-failed and completed runs separately.
+2. Finish/review the immediate-base drafts and durable evidence; commit verified
+   runner/doc changes and clean only task-owned VMs. Do not push.
+3. For future submission or deployment, rerun the relevant actual head and follow
+   documented migration steps literally. Preserve CA and existing leaf/key
+   caches and require zero incidental file changes or service restarts.
+4. Additional evidence is needed for mixed-version/topology combinations,
+   Windows/mobile runtime and bundle import, alternate logging/tunnels,
+   unprovisioned check mode, reboot races, external watchdog writers and broader
+   reload settings. Existing results are Linux/systemd scope, not universal
+   availability guarantees.

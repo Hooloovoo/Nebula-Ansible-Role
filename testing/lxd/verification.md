@@ -1,5 +1,9 @@
 # Regression integration verification
 
+The [focused-series and SSH records](#focused-normal-role-series-and-ssh-rotation)
+below describe the newer local PR stack. Earlier sections retain revision-scoped
+history; their then-missing features are not statements about later branches.
+
 ## Split-selector preservation rehearsal
 
 The new `--pki-mode` selectors were rehearsed against the preserved integrated
@@ -222,3 +226,146 @@ Renumbering intentionally interrupts existing overlay connections. These tests
 use the independent LXD management transport; they do not establish autonomous
 rollback after losing a Nebula SSH management session. Use an independent
 management path for renumbering until that separate recovery feature is tested.
+
+## Focused normal-role series and SSH rotation
+
+Current dependencies and heads are indexed in
+[`../../nebula-rotation-pr-series-plan.md`](../../nebula-rotation-pr-series-plan.md).
+Maintainer-facing scope/dependency descriptions are in `../../pr-drafts/`.
+The role's user documentation contains behavior and operational prerequisites,
+not this matrix.
+
+### Actual extracted candidates
+
+These tests used the real focused branches, not just the preserved integrated
+safe-PKI implementation. Counts include three baseline checks where indicated.
+
+| Candidate | Release | Completed checks | Run IDs |
+|---|---|---|---|
+| A `2d4b0c4` | 1.8.0 | 98 PKI/upgrade + 60 IP | `nebtest-69c1ce8146`, `nebtest-141a752b7a` |
+| A `2d4b0c4` | 1.12.0 | 98 PKI/upgrade + 60 IP | `nebtest-ee0f4ae627`, `nebtest-5ea711e6cb` |
+| B `2ef39af` | 1.8.0 | 42 in-place/upgrade + 17 IP | `nebtest-893f3ee16e`, `nebtest-4868c113f4` |
+| B `2ef39af` | 1.12.0 | 42 in-place/upgrade + 17 IP | `nebtest-a83fc00357`, `nebtest-ec4e3b553a` |
+| C `10415ae` | 1.12.0 | 5 subject/filename checks | `nebtest-2a0aeafb54` |
+| D `b9504f4` | 1.10.3 / 1.12.0 | 5 signer checks each | `nebtest-ec29e25d02`, `nebtest-a797450e81` |
+| E initial implementation | 1.8.0 / 1.12.0 | 5 staged/key checks each | `nebtest-ccde0fb0a8`, `nebtest-a8e9a39168` |
+| F initial implementation | 1.8.0 / 1.12.0 | 6 lighthouse checks each | `nebtest-2ba2fd3cd1`, `nebtest-2ab1101a91` |
+| G initial implementation | 1.12.0 | 11 issuer checks | `nebtest-9f2bb1a5bc` |
+| H `509cdf7` | 1.12.0 | 7 confirmation/controller-kill/watchdog checks | `nebtest-a7e1b4d86e` |
+
+A adopted PR25's baseline with zero changes, unchanged PKI hashes and PIDs.
+B's test failed on A at the active fingerprint assertion (`nebtest-281b3a2d1a`),
+then passed on B. Other focused red runs: C on B `nebtest-51a0561a36`; D on C
+`nebtest-eab1548bae`; E on D `nebtest-860346a472`; F on E
+`nebtest-76e027b36c`; G on F `nebtest-090ee55074`. These are genuine negative
+acceptance results, not passing tests of missing features.
+
+The classified-config implementation passed 8 focused assertions each on
+1.8.0/1.12.0, trust-only updates passed 3 on 1.12.0, and inline debug SSH keys
+passed their focused 1.12.0 red/green case. Those implementation-era results
+precede the inherited legacy-bundle changes below; later integration and unit
+results are kept distinct.
+
+### Complete integrated implementation before the compatibility follow-up
+
+Role head **`e3e094b`**, based on the combined ordinary-role stack and PR25:
+
+- **57 SSH rotation assertions**, Nebula 1.12.0, `nebtest-01251752e0`.
+- **11 SSH recovery assertions**, Nebula 1.12.0, `nebtest-ad5e1fd665`.
+- **137 PKI/upgrade** (`nebtest-992ea59d8f`), **77 IP/restart**, **32 certificate**,
+  **39 firewall** (`nebtest-c192ed8ce5`) and **28 CA-host**
+  (`nebtest-dae8d68e24`) assertions, all on 1.12.0.
+
+The PKI upgrade baseline was upstream+PR25 `a0527eb`; unchanged deployment
+adoption reported zero changes. Failure paths retained wrong-CA/key rejection,
+restored hashes, intended runtime addresses, service behavior and backup cleanup.
+The full firewall pass supersedes the earlier incomplete 1.11.2 attempt only
+for its own release/head; it does not retroactively complete that earlier run.
+
+The rotation fixture runs Ansible over Nebula SSH from the CA/node controller,
+with separate lighthouse/server participants. It uses v1 CA/leaf format on the
+1.12.0 binary, restricted CA networks, explicit FQDN subjects, unrelated valid
+trust and an expired historical entry. Successful prepare/migrate/finalize
+retained keys and PIDs, a persistent SSH session and all sampled new connections.
+All phase repeats preserved PKI bytes and reported zero changes.
+
+Negative phase gates covered unprepared migration, limited/check-mode runs,
+premature finalization, unmanaged trust/identity readiness, incomplete overlap,
+wrong successor key, altered CA-pair binding and missing migration confirmation.
+The debug-console probe verified a fresh tunnel index and exact expected leaf
+fingerprint, rather than treating old SSH or ping as proof of new trust. A
+retired-issuer peer was rejected on a fresh attempt, the new-issuer control
+recovered, and ordinary-role convergence/reissue worked after finalization.
+
+The separate SSH recovery case supplied a locally valid leaf from a CA accepted
+by the node but not its management peer. Confirmation failed and restored old
+PKI/process state. It then deliberately blocked management SSH through a firewall
+reload: the on-host timer restored reachability, recording
+`rollback_trigger=watchdog`. Nine failed SSH samples during the deliberate outage
+were expected and were not presented as uninterrupted connectivity.
+
+### Legacy shared-bundle compatibility regression and repair
+
+A current-CA-first shared `ca.crt` bundle worked on unmodified PR25 defaults
+(`nebtest-03620be692`, 1.12.0, 5 assertions) but failed on the new stack
+(`nebtest-79b3b46f0f`). D's strict single-signer validator and G's leaf JSON
+normalizer had rejected a formerly supported shared input. On 1.8.0, printing a
+bundle additionally emits multiple JSON documents rather than one JSON array
+(`nebtest-3d02eda7bf`, failure at runtime trust inspection).
+
+The fix keeps default shared-path first-CA signing, isolates that public CA for
+verification/metadata and distributes the full runtime bundle unchanged.
+Separate explicit signer inputs must still contain exactly one CA and reject
+extra material. Runtime trust membership compares decoded public certificate
+bytes, avoiding version-dependent bundle JSON. E uses the isolated CA for staged
+issue and verification; G inspects only the selected CA for issuer drift.
+
+| Tested candidate | Case / release | Assertions | Run ID |
+|---|---|---|---|
+| D follow-up `6be8e73` | legacy / 1.8.0 | 5 | `nebtest-5e23df6eae` |
+| D follow-up `6be8e73` | legacy / 1.12.0 | 5 | `nebtest-3441a7ad04` |
+| D follow-up `6be8e73` | expired legacy / 1.10.3 | 5 | `nebtest-8cb4805a85` |
+| E follow-up `afad75e` | staged failure/key retention / 1.12.0 | 5 | `nebtest-aaab03b164` |
+| E follow-up `afad75e` | expired legacy / 1.10.3 | 5 | `nebtest-513252ad32` |
+| G follow-up `7d9e84f` | legacy / 1.8.0 | 5 | `nebtest-841ddc3605` |
+| G follow-up `7d9e84f` | legacy / 1.12.0 | 5 | `nebtest-604aad17c0` |
+| G follow-up `7d9e84f` | expired legacy / 1.10.3 | 5 | `nebtest-8f95dea008` |
+
+Each legacy pass verifies intended issuer, intact bundle distribution,
+repeat-run identity preservation and fresh connectivity with the retained
+consumer process. The expired 1.10.3 test is important because verifying against
+the whole bundle would fail despite the daemon accepting it. Six unit tests
+cover first selection, strict explicit inputs, missing/extra material and public
+identity membership. Tests ran on the candidate working trees subsequently
+committed at the listed revisions; the last strict-extra-material assertion was
+also checked by the unit suite.
+
+An initial D expired run (`nebtest-5962003c1c`) encountered an empty Ansible
+module response during repeat copy; the clean rerun passed. Runs
+`nebtest-1c1bfced86` and `nebtest-2678b000f6` were interrupted by outer command
+deadlines and are not completed passes. Interrupted cleanup was completed using
+the ownership-checked saved manifest. Saved cleanup now tolerates instances
+already removed by a previous partial cleanup while still checking every
+remaining instance's ownership marker.
+
+### Final post-compatibility integration
+
+Current role **`77dec86`** merges the compatibility fixes through the recorded
+immediate bases. Its 21 role unit tests pass (6 CA selection, 7 transaction,
+4 configuration classification and 4 rotation). The runner's 10 tests
+(8 selector/coverage and 2 cleanup ownership/idempotency checks), Python
+compilation and Ansible syntax checks also pass.
+
+Initial concurrent reruns were not complete passes: `nebtest-c37e420049`
+reached the wrong-CA lighthouse recovery and then failed backup cleanup after
+an empty Ansible module response; `nebtest-57d9400133` passed prepare/migrate,
+their repeats and the exercised negative gates but hit the outer 30-minute
+deadline before completing finalization. Neither supersedes the completed
+implementation-head evidence. Serial reruns with two vCPUs are in progress;
+their final results will be recorded here before completion.
+
+The ordinary controller uses ansible-core 2.21.6/community.general 13.5.0 and
+the authenticated LXD client. The SSH fixture records its Ubuntu-packaged guest
+Ansible version in command output. These are Ubuntu 24.04 Linux/systemd tests,
+not Windows/mobile/mixed-version or arbitrary-topology evidence. Public logs
+remain temporary; run IDs do not promise indefinite artifact availability.
