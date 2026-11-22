@@ -330,6 +330,9 @@ def trust_only(s):
 
 
 def run_feature(suite, name):
+    if name in ('pki-drift', 'pki-recovery', 'pki-validation', 'pki-probe'):
+        from pki_review_cases import drift, recovery, validation, probe
+        return {'pki-drift': drift, 'pki-recovery': recovery, 'pki-validation': validation, 'pki-probe': probe}[name](suite)
     cases = {'debug-keys': debug_keys, 'subject': subject, 'signer': signer, 'staged': staged, 'lighthouse': lighthouse, 'issuer': issuer,
              'confirmation': confirmation}
     cases['config'] = config

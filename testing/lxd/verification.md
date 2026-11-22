@@ -4,6 +4,13 @@ The [focused-series and SSH records](#focused-normal-role-series-and-ssh-rotatio
 below describe the newer local PR stack. Earlier sections retain revision-scoped
 history; their then-missing features are not statements about later branches.
 
+The subsequent [PR A review follow-up](pki-install-review-verification.md)
+documents the installer refactor developed on top of `2d4b0c4`, now consolidated
+as `pr/pki-install-submission` at `e9bf712`, with its narrowed early-drift-rejection
+contract and recovery/probe fixes. Its source hash and new
+matrix are recorded separately; the original branch-head results below are not
+relabelled as results for the follow-up.
+
 ## Split-selector preservation rehearsal
 
 The new `--pki-mode` selectors were rehearsed against the preserved integrated

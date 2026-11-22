@@ -1,5 +1,16 @@
 # CA rotation through focused improvements to the normal role
 
+## PR A independent-review follow-up
+
+Original PR A remains at `pr/pki-install` / `2d4b0c4`. The reviewed submission is
+`pr/pki-install-submission` / `e9bf712`, one feature commit directly above PR25.
+It contains the agreed early-drift-rejection boundary, retained incomplete
+recovery, strict service-probe validation and readability refactor. It has not
+been propagated into B–J. Both 1.8.0 and 1.12.0 passed 98 PKI/adoption,
+60 IP/restart and 30 focused checks; 15 synthetic probe-state checks passed too. See
+[`testing/lxd/pki-install-review-verification.md`](testing/lxd/pki-install-review-verification.md)
+for the matching committed task hash, TDD sequence, measurements and exact evidence.
+
 ## Goal and working boundaries
 
 Prepare small, independently useful local PR branches for
@@ -22,7 +33,8 @@ open PRs without an explicit request.
 |---|---|---|---|
 | prerequisite | `feature/cert-json-compat` / `a0527eb` | upstream `db0ebc4` | Submitted PR25 |
 | A | `pr/pki-install` / `2d4b0c4` | PR25 | Consumer-owned PKI transaction |
-| B | `pr/pki-in-place` / `2ef39af` | A | Pre-sign snapshot and CA-node recovery |
+| A submission | `pr/pki-install-submission` / `e9bf712` | PR25 | Reviewed/refactored received-PKI transaction; original A preserved |
+| B | `pr/pki-in-place` / `2ef39af` | original A | Pre-sign snapshot and CA-node recovery |
 | C | `pr/cert-subject` / `10415ae` | B | Subject independent of inventory filename |
 | D | `pr/ca-signing-inputs` / `6be8e73` | C | Isolated signer and supplied trust bundle |
 | E | `pr/staged-cert-signing` / `b4e0957` | D | Verified staged reissue; retain/localize keys |

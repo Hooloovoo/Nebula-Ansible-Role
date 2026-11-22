@@ -764,15 +764,24 @@ while True:
             fresh_peer('server', 'lh', '10.193.0.4')
 
             # Reproduce the old silent failure: desired files already installed, old
-            # address still active. A rerun must repair runtime drift without re-signing.
+            # address still active. PR A's narrowed contract rejects it before
+            # publication; the preserved integrated branches still repair it.
             status, _ = run(self.inventory(), 'server', 'safe-apply.yml',
                             ['-e', json.dumps({'certificate_name': 'server', 'stage_only': True})])
             self.check('legacy drift fixture stages new files without activation', status == 0 and addresses('server') == ['10.193.0.4/24'])
             before, old_pid = hashes('server', 'server'), pid('server')
-            status, _ = run(self.inventory(), 'server')
-            self.check('legacy rejected-reload runtime drift is repaired without re-signing', status == 0 and before == hashes('server', 'server'))
-            activated('server', 'server', '10.193.0.5/24', old_pid)
-            fresh_peer('server', 'lh', '10.193.0.5')
+            status, output = run(self.inventory(), 'server')
+            if (self.args.role_path / 'tasks/pki_inspect_networks.yml').is_file():
+                self.check('pre-existing runtime drift fails before installation', status != 0 and 'runtime drift' in output.lower())
+                self.check('pre-existing runtime drift preserves installed hashes', before == hashes('server', 'server'))
+                self.check('pre-existing runtime drift preserves the running process', old_pid == pid('server'))
+                self.check('pre-existing runtime drift leaves the running address unchanged', addresses('server') == ['10.193.0.4/24'])
+                no_backups('server')
+                fresh_peer('server', 'lh', '10.193.0.4')
+            else:
+                self.check('legacy rejected-reload runtime drift is repaired without re-signing', status == 0 and before == hashes('server', 'server'))
+                activated('server', 'server', '10.193.0.5/24', old_pid)
+                fresh_peer('server', 'lh', '10.193.0.5')
 
         if install:
             node_cases()
@@ -968,7 +977,7 @@ def main():
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--nebula-version', action='append', dest='versions')
     parser.add_argument('--scenario', choices=['auto', 'all', 'certificates', 'certificate-format-upgrade', 'firewall', 'ca-host', 'role-feature', 'safe-pki', *PKI_SCENARIOS], default='auto')
-    parser.add_argument('--feature-case', choices=['debug-keys', 'subject', 'signer', 'legacy-bundle', 'legacy-expired-bundle', 'ca-move', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'trust-only', 'rotation-ssh', 'ssh-recovery'])
+    parser.add_argument('--feature-case', choices=['pki-drift', 'pki-recovery', 'pki-validation', 'pki-probe', 'debug-keys', 'subject', 'signer', 'legacy-bundle', 'legacy-expired-bundle', 'ca-move', 'staged', 'lighthouse', 'issuer', 'confirmation', 'config', 'trust-only', 'rotation-ssh', 'ssh-recovery'])
     parser.add_argument('--pki-mode', choices=['install', 'in-place', 'combined'],
                         help='safe-PKI coverage: PR A, PR B, or both (default: combined)')
     parser.add_argument('--list-tests', action='store_true', help='print resolved runs without provisioning or requiring LXD access')

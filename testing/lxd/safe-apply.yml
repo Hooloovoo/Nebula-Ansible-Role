@@ -2,6 +2,8 @@
 # Test-only single-file/invalid-input entry point; production has no test hook.
 - hosts: all
   become: true
+  environment:
+    PATH: "{{ test_command_path | default(ansible_env.PATH) }}"
   tasks:
     - name: Read desired test PKI from signer
       slurp:
@@ -51,3 +53,6 @@
       vars:
         pki_files: "{{ [desired.results[-1]] if ca_only | default(false) else desired.results }}"
       when: not stage_only | default(false)
+      loop: "{{ [1, 2] if repeat_apply | default(false) else [1] }}"
+      loop_control:
+        loop_var: pki_test_iteration

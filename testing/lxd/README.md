@@ -124,8 +124,11 @@ The separate opt-in `safe-apply-ip-change` acceptance scenario requires successf
 renumbering with a new process, exactly the desired tunnel address and a fresh
 peer handshake. Safe rejection is not counted as successful renumbering. It
 tests address and prefix changes, no-op/check mode, group-only reloads after a
-renumbering, and repair of files/runtime divergence left by an older failed
-reload. Node, in-place CA-node and separate-CA lighthouse paths also exercise
+renumbering, and files/runtime divergence left by an older failed reload. The
+narrowed PR A path (`tasks/pki_inspect_networks.yml`) must reject that pre-existing
+drift before publication; preserved integrated branches must still repair it.
+Ordinary requested renumbering must succeed in both cases. Node, in-place
+CA-node and separate-CA lighthouse paths also exercise
 an injected startup failure: the play must fail, restore byte-identical PKI,
 restart with the original address, retain connectivity and remove backups.
 The scenario records addresses, certificate JSON and journal evidence before
@@ -190,6 +193,10 @@ branch. These cases are opt-in and do not expand `auto` or `all`:
 
 | Case | Required feature / acceptance scope |
 |---|---|
+| `pki-drift` | PR A review follow-up: reject pre-existing certificate/interface drift before target publication |
+| `pki-recovery` | PR A review follow-up: partial-backup failure, retained failed-restore snapshot and independent recovery |
+| `pki-validation` | PR A review follow-up: forced validation failure, verbose secret protection, same-play includes and disabled tunnel |
+| `pki-probe` | PR A review follow-up: unexpected service-probe errors stop before publication; stopped services keep normal copy/start behavior |
 | `subject` | C: explicit certificate subjects, canonical filenames and repeat convergence |
 | `signer` | D: separate signer inputs and intact desired trust containing an expired historical CA |
 | `legacy-bundle` | Existing shared default signing/trust paths, first-CA issue and intact multi-CA distribution |
@@ -245,6 +252,13 @@ for branch bases and actual-head evidence.
 
 See [verification results](verification.md) for the tested revisions, completed
 runs, historical IP-change failure and its fix, and coverage limitations.
+The [PR A review follow-up](pki-install-review-verification.md) records the
+early-drift-rejection boundary, retained incomplete recovery, strict service
+inspection, readability measurements and its separate candidate matrix.
+`python testing/lxd/check-pki-probe-states.py /path/to/pr-a` exercises the actual
+probe task with 15 synthetic CLI states on the controller, without querying a
+real service. It checks classification and visible failure output; it is not a
+live restart-race or Nebula integration test.
 
 The separate [expired-CA binary probe](expired-ca-verification.md) distinguishes
 `nebula-cert verify`, `nebula -test`, startup and SIGHUP behavior on 1.10.3 and

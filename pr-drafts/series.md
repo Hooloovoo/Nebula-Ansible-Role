@@ -1,5 +1,10 @@
 # Focused normal-role PR drafts
 
+For the reviewed PR A submission, use
+[the current description](pki-install-submission.md): branch
+`pr/pki-install-submission`, commit `e9bf712`, directly on PR25. The original
+`pr/pki-install` / `2d4b0c4` and its historical draft remain preserved.
+
 ## C — Allow certificate subjects independent of inventory names
 
 Branch `pr/cert-subject` (`10415ae`), base B. Add `nebula_cert_name` while keeping

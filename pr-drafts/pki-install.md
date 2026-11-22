@@ -1,5 +1,10 @@
 # Apply PKI changes safely on certificate consumers
 
+This records the original candidate `pr/pki-install` at `2d4b0c4`. The reviewed
+submission is `pr/pki-install-submission` at `e9bf712`; use
+[its updated description](pki-install-submission.md) for the upstream draft.
+The original results below remain specific to the original implementation.
+
 ## Summary
 
 Back up changed PKI remotely, validate the complete installed certificate/key
