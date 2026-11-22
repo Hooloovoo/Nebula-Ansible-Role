@@ -1,0 +1,66 @@
+---
+# Received PKI only: the signer has not changed this consumer's live files.
+# Flow: inspect -> compare -> back up -> install -> activate/verify -> recover.
+# inspect resets changed/backup/recovery state on every include. Only a completed
+# backup may protect publication; recovery_pending stays true until verification
+# succeeds, so cleanup cannot discard an incomplete recovery's originals.
+- name: Manage PKI installation
+  become: true
+  vars:
+    pki_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+    pki_basename: >-
+      {{ nebula_lighthouse_hostname if inventory_hostname in groups['nebula_lighthouse'] else inventory_hostname }}
+    pki_certificate_path: "{{ nebula_config_dir }}/{{ pki_basename }}.crt"
+    pki_install_names: "{{ pki_names | default(pki_files | map(attribute='item') | list) }}"
+    pki_running: "{{ pki_process.rc == 0 }}"
+    pki_live_change: "{{ not ansible_check_mode and pki_running and pki_changed | length > 0 }}"
+    pki_address_query: "[].addr_info[].join('/', [local, to_string(prefixlen)])"
+  block:
+    - name: Inspect the consumer before any replacement
+      include_tasks: pki_inspect.yml
+
+    - name: Identify changed content without retaining private key copies
+      set_fact:
+        pki_changed: "{{ pki_changed + [item.item] }}"
+      loop: "{{ pki_before.results }}"
+      when: >-
+        item.stat.checksum | default('') !=
+        ((pki_files | selectattr('item', 'equalto', item.item) | first).content | b64decode | hash('sha1'))
+      no_log: true
+
+    - name: Apply received PKI with recovery for a running service
+      block:
+        - name: Back up changed original files before publication
+          include_tasks: pki_backup.yml
+          when: pki_live_change
+
+        - name: Retain the completed backup until verification succeeds
+          set_fact:
+            pki_recovery_pending: "{{ pki_backup.path is defined }}"
+
+        - name: Install supplied PKI files sequentially
+          copy:
+            dest: "{{ nebula_config_dir }}/{{ item.item }}"
+            content: "{{ item.content | b64decode }}"
+            owner: root
+            group: root
+            mode: '0600'
+          loop: "{{ pki_files }}"
+          no_log: true
+
+        - name: Validate and activate changed PKI on the running service
+          include_tasks: pki_activate.yml
+          when: pki_live_change
+
+        - name: Release the backup after a verified update
+          set_fact:
+            pki_recovery_pending: false
+      rescue:
+        - name: Recover and report the original update failure
+          include_tasks: pki_recover.yml
+      always:
+        - name: Remove only a disposable transaction backup
+          file: {path: "{{ pki_backup.path }}", state: absent}
+          changed_when: false
+          no_log: true
+          when: pki_backup.path is defined and not pki_recovery_pending

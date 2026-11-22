@@ -1,0 +1,38 @@
+---
+# Read the installed certificate and actual interface before publishing any file.
+- name: Inspect original certificate networks
+  include_tasks: pki_inspect_certificate.yml
+
+- name: Retain the original certificate networks for classification and recovery
+  set_fact:
+    pki_original_networks: "{{ pki_certificate_networks }}"
+    pki_original_unsafe_networks: "{{ pki_certificate_unsafe_networks }}"
+
+- name: Read existing configuration to identify the tunnel
+  slurp:
+    src: "{{ nebula_config_dir }}/config.yml"
+  register: pki_original_config
+  no_log: true
+
+- name: Identify the configured tunnel device and enabled state
+  set_fact:
+    pki_tun_device: "{{ (pki_original_config.content | b64decode | from_yaml).tun.dev | default('nebula1') }}"
+    pki_tun_disabled: "{{ (pki_original_config.content | b64decode | from_yaml).tun.disabled | default(false) | bool }}"
+  no_log: true
+
+- name: Inspect current tunnel addresses
+  command:
+    argv: [ip, -json, address, show, dev, "{{ pki_tun_device }}"]
+  register: pki_addresses
+  changed_when: false
+  check_mode: false
+  when: not pki_tun_disabled
+
+- name: Reject pre-existing runtime drift before installing PKI
+  assert:
+    that: >-
+      pki_original_networks | difference(pki_addresses.stdout | from_json | json_query(pki_address_query)) | length == 0
+    fail_msg: >-
+      Pre-existing runtime drift: the installed certificate and tunnel addresses disagree.
+      Inspect and recover the host using independent management before retrying.
+  when: not pki_tun_disabled

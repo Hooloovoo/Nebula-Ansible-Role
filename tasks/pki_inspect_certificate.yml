@@ -1,0 +1,17 @@
+---
+# Read public certificate network fields across the old and new JSON formats.
+- name: Read installed certificate metadata
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", print, -json, -path, "{{ pki_certificate_path }}"]
+  register: pki_certificate
+  changed_when: false
+  check_mode: false
+
+- name: Normalize installed certificate networks
+  set_fact:
+    pki_certificate_networks: >-
+      {{ pki_certificate.stdout | from_json | json_query('[].details.networks[] || details.ips || `[]`') | unique | sort }}
+    pki_certificate_unsafe_networks: >-
+      {{ pki_certificate.stdout | from_json |
+      json_query('[].details.unsafeNetworks[] || details.subnets || `[]`') | unique | sort }}
+    pki_certificate_fingerprint: "{{ pki_certificate.stdout | from_json | json_query('[0].fingerprint || fingerprint') }}"

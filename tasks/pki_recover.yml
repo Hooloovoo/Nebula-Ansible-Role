@@ -1,0 +1,35 @@
+---
+- name: Recover without losing the original diagnostic or backup
+  vars:
+    pki_failure_hidden: >-
+      {{ ansible_failed_task.no_log | default(false, true) | bool or
+      ansible_failed_result._ansible_no_log | default(false) | bool }}
+    pki_failure_outputs:
+      - "{{ ansible_failed_result.stderr | default('') }}"
+      - "{{ ansible_failed_result.module_stderr | default('') }}"
+      - "{{ ansible_failed_result.stdout | default('') }}"
+      - "{{ ansible_failed_result.module_stdout | default('') }}"
+      - "{{ ansible_failed_result.msg | default('') }}"
+  block:
+    - name: Retain only a safe, bounded failure description
+      set_fact:
+        pki_update_failure: >-
+          PKI installation or activation failed at '{{ ansible_failed_task.name | default('unknown task', true) }}':
+          {{ 'details hidden by no_log' if pki_failure_hidden else
+          ((pki_failure_outputs | map('trim') | select | first | default('no diagnostic output', true))
+          .splitlines() | last | truncate(300)) }}.
+      no_log: true
+    - name: Attempt recovery without discarding an incomplete backup
+      block:
+        - name: Restore PKI after failed activation
+          include_tasks: pki_restore.yml
+          when: pki_recovery_pending
+      rescue:
+        - name: Report incomplete recovery and retain original files
+          fail:
+            msg: >-
+              {{ pki_update_failure }} Recovery failed; original files are retained in
+              {{ pki_backup.path }}. Recover using independent management before retrying.
+    - name: Stop after failed PKI activation
+      fail:
+        msg: "{{ pki_update_failure }}"

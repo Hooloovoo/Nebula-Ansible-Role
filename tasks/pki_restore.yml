@@ -1,0 +1,30 @@
+---
+# Only a completed backup with publication begun is eligible for restoration.
+- name: Restore original PKI files and metadata
+  command:
+    argv: [cp, -p, '--', "{{ pki_backup.path }}/{{ item.item }}", "{{ nebula_config_dir }}/{{ item.item }}"]
+  loop: "{{ pki_before.results }}"
+  no_log: true
+  when: item.stat.exists and item.item in pki_changed
+
+- name: Remove files absent before the transaction
+  file: {path: "{{ nebula_config_dir }}/{{ item.item }}", state: absent}
+  loop: "{{ pki_before.results }}"
+  no_log: true
+  when: not item.stat.exists
+
+- name: Reactivate restored PKI
+  systemd:
+    name: "{{ pki_service }}"
+    state: "{{ 'restarted' if pki_activation_attempted and pki_activation == 'restarted' else 'reloaded' }}"
+
+- name: Verify the restored service and original networks
+  include_tasks: pki_verify.yml
+  vars:
+    pki_restarting: "{{ pki_activation_attempted and pki_activation == 'restarted' }}"
+    pki_expected_networks: "{{ pki_original_networks }}"
+    pki_check_journal: false
+
+- name: Mark recovery complete only after verification
+  set_fact:
+    pki_recovery_pending: false

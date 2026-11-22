@@ -1,0 +1,42 @@
+---
+# This reads state, not key content. File backups are made only for live changes.
+- name: Reset state owned by this installer include
+  set_fact:
+    pki_changed: []
+    pki_backup: {}
+    pki_recovery_pending: false
+    pki_activation_attempted: false
+    pki_activation: reloaded
+
+- name: Inspect running configuration and process
+  shell: |
+    if test {{ ansible_facts['system'] | quote }} = Linux &&
+       test -f {{ (nebula_config_dir ~ '/config.yml') | quote }}; then
+      systemctl is-active {{ pki_service | quote }} &&
+      systemctl show {{ pki_service | quote }} -p MainPID --value
+    else
+      printf '%s\n' unconfigured
+      exit 3
+    fi
+  register: pki_process
+  changed_when: false
+  # Only recognized non-running states may use the normal installation path.
+  # Unexpected probe/transport errors must not bypass protected installation.
+  failed_when: >-
+    not ((pki_process.rc | default(-1) == 0 and
+    pki_process.stdout_lines | default([]) | length == 2 and
+    pki_process.stdout_lines[0] == 'active' and pki_process.stdout_lines[1] | int > 0) or
+    (pki_process.rc | default(-1) in [3, 4] and
+    pki_process.stdout | default('') in ['unconfigured', 'inactive', 'failed', 'unknown']))
+  check_mode: false
+
+- name: Inspect original file metadata
+  stat:
+    path: "{{ nebula_config_dir }}/{{ item }}"
+  loop: "{{ pki_install_names }}"
+  register: pki_before
+  no_log: true
+
+- name: Require a consistent starting network state for a running service
+  include_tasks: pki_inspect_networks.yml
+  when: pki_running

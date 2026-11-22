@@ -1,0 +1,52 @@
+---
+# Shared postconditions; callers specify restart/reload and expected networks.
+- name: Require an active service with a nonzero process
+  shell: >-
+    systemctl is-active {{ pki_service | quote }} &&
+    systemctl show {{ pki_service | quote }} -p MainPID --value
+  register: pki_verified
+  changed_when: false
+  until: pki_verified.rc == 0 and pki_verified.stdout_lines | last | int > 0
+  retries: 10
+  delay: 1
+
+- name: Confirm reload preserved the original process
+  assert:
+    that: pki_verified.stdout == pki_process.stdout
+  when: not pki_restarting
+
+- name: Confirm restart started a new process
+  assert:
+    that: pki_verified.stdout != pki_process.stdout
+  when: pki_restarting
+
+- name: Verify activation journal evidence when available
+  command:
+    argv: [journalctl, -u, "{{ pki_service }}", "--after-cursor={{ pki_cursor_id }}", --no-pager, -o, cat]
+  vars:
+    pki_cursor_id: "{{ pki_cursor.stdout | default('') | regex_findall('-- cursor: (.+)') | first | default('') }}"
+  register: pki_verified
+  changed_when: false
+  until: >-
+    pki_verified.rc == 0 and (pki_restarting or
+    ('refreshed from disk' in pki_verified.stdout and pki_certificate_fingerprint in pki_verified.stdout))
+  failed_when: >-
+    pki_verified.rc != 0 or 'Could not load client cert' in pki_verified.stdout or
+    'Failed to load ca from config' in pki_verified.stdout or
+    'Networks in new cert was different from old' in pki_verified.stdout or
+    'IP in new cert was different from old' in pki_verified.stdout
+  retries: 10
+  delay: 1
+  when: pki_check_journal and pki_cursor_id | length > 0
+
+- name: Verify expected certificate networks on the tunnel
+  command:
+    argv: [ip, -json, address, show, dev, "{{ pki_tun_device }}"]
+  register: pki_addresses
+  changed_when: false
+  until: >-
+    pki_addresses.rc == 0 and
+    pki_expected_networks | difference(pki_addresses.stdout | from_json | json_query(pki_address_query)) | length == 0
+  retries: 5
+  delay: 1
+  when: not pki_tun_disabled

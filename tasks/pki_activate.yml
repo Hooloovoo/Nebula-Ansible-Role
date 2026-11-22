@@ -1,0 +1,43 @@
+---
+- name: Inspect proposed certificate networks
+  include_tasks: pki_inspect_certificate.yml
+
+- name: Select restart only for changed certificate networks
+  set_fact:
+    pki_activation: "{{ 'restarted' if pki_networks_changed else 'reloaded' }}"
+  vars:
+    pki_networks_changed: >-
+      {{ pki_certificate_networks != pki_original_networks or
+      pki_certificate_unsafe_networks != pki_original_unsafe_networks }}
+
+- name: Verify node certificate against the CA bundle
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula-cert", verify, -ca, "{{ nebula_config_dir }}/ca.crt",
+           -crt, "{{ pki_certificate_path }}"]
+  changed_when: false
+
+- name: Validate complete PKI set
+  command:
+    argv: ["{{ nebula_config_dir }}/nebula", -test, -config, "{{ nebula_config_dir }}/config.yml"]
+  changed_when: false
+
+- name: Record journal cursor when available
+  command:
+    argv: [journalctl, -u, "{{ pki_service }}", -n, '0', --show-cursor, --no-pager]
+  register: pki_cursor
+  changed_when: false
+  failed_when: false
+
+- name: Record activation attempt for recovery
+  set_fact:
+    pki_activation_attempted: true
+
+- name: Activate PKI using the selected operation
+  systemd: {name: "{{ pki_service }}", state: "{{ pki_activation }}"}
+
+- name: Verify the activated process, certificate and tunnel
+  include_tasks: pki_verify.yml
+  vars:
+    pki_restarting: "{{ pki_activation == 'restarted' }}"
+    pki_expected_networks: "{{ pki_certificate_networks }}"
+    pki_check_journal: true

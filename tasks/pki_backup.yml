@@ -1,0 +1,22 @@
+---
+# Called before publication. If a copy fails, live files have not been changed.
+- name: Create root-only backup directory
+  tempfile:
+    state: directory
+    prefix: nebula-pki-
+  register: pki_backup
+  changed_when: false
+  no_log: true
+
+- name: Back up original files remotely
+  command:
+    argv:
+      - cp
+      - -p
+      - '--'
+      - "{{ nebula_config_dir }}/{{ item.item }}"
+      - "{{ pki_backup.path }}/{{ item.item }}"
+  loop: "{{ pki_before.results }}"
+  changed_when: false
+  no_log: true
+  when: item.stat.exists and item.item in pki_changed
