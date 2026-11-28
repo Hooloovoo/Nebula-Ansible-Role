@@ -17,6 +17,7 @@ jobs:
           sudo snap install lxd --channel=5.21/stable
           sudo lxd waitready
           sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
           sudo lxc project create local:nebula-ansible-testing -c features.images=false -c features.profiles=false
       - name: Run the smoke test
         run: |
