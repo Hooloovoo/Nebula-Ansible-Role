@@ -1,0 +1,53 @@
+---
+- name: Inspect provisioning state even when guests are unreachable
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Resolve identity and inspect provisioning state
+      ansible.builtin.include_tasks:
+        file: resources.yml
+        apply:
+          ignore_errors: true
+      vars:
+        test_validate_ownership: false
+
+    - name: Print provisioning state
+      ansible.builtin.debug:
+        msg: "{{ hostvars['localhost'].test_instances.stdout | default('[]', true) | from_json | map(attribute='name') | list }}"
+
+- name: Collect independent-management diagnostics before cleanup
+  hosts: nebula_test
+  gather_facts: false
+  vars:
+    test_guest_config: >-
+      {{ (hostvars['localhost'].test_instances.stdout | default('[]', true) | from_json |
+          selectattr('name', 'equalto', ansible_host) | map(attribute='config') | first) | default({}) }}
+  tasks:
+    - name: Inspect service, journal and network state
+      timeout: 30
+      ansible.builtin.command: "{{ item }}"
+      vars:
+        test_service: "{{ 'lighthouse' if inventory_hostname in groups['nebula_lighthouse'] else 'nebula' }}"
+      loop:
+        - "systemctl status {{ test_service }} --no-pager --full"
+        - "journalctl -u {{ test_service }} --no-pager -n 100"
+        - ip addr
+        - ip route
+        - tail -n 100 /var/log/molecule-prepare.log
+        - "{{ nebula_config_dir }}/nebula -test -config {{ nebula_config_dir }}/config.yml"
+      register: diagnostics
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
+      when: test_guest_config.get('user.nebula-molecule-owner', '') == nebula_test_owner
+
+    - name: Print diagnostic results without reading private keys
+      ansible.builtin.debug:
+        msg: "{{ item.stdout_lines | default([]) + item.stderr_lines | default([]) }}"
+      loop: "{{ diagnostics.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"

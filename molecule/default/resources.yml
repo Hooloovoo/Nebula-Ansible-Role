@@ -1,0 +1,36 @@
+---
+# Resolve identity and inspect ownership before touching any existing instance.
+- name: Resolve this checkout's test resources
+  ansible.builtin.set_fact:
+    test_remote: "{{ hostvars['lighthouse'].ansible_lxd_remote }}"
+    test_project: "{{ hostvars['lighthouse'].ansible_lxd_project }}"
+    test_owner: "{{ hostvars['lighthouse'].nebula_test_owner }}"
+    test_names: "{{ groups['nebula_test'] | map('extract', hostvars, 'ansible_host') | list }}"
+
+- name: List instances in the selected LXD project
+  timeout: 30
+  ansible.builtin.command:
+    argv: [lxc, list, "{{ test_remote }}:", --project, "{{ test_project }}", --format, json]
+  register: test_instances
+  changed_when: false
+
+- name: Require every guest before convergence
+  ansible.builtin.assert:
+    quiet: true
+    that: item in (test_instances.stdout | from_json | map(attribute='name') | list)
+    fail_msg: "Missing instance {{ item }} in {{ test_remote }}:{{ test_project }}; run molecule create first."
+  loop: "{{ test_names }}"
+  when: test_require_instances | default(false)
+
+- name: Refuse to manage an instance owned by someone else
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.config.get('user.nebula-molecule-owner', '') == test_owner
+    fail_msg: "Refusing to touch unowned instance {{ item.name }} in {{ test_remote }}:{{ test_project }}"
+  loop: "{{ test_instances.stdout | from_json }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - test_validate_ownership | default(true)
+    - item.name in test_names
