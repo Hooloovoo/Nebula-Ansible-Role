@@ -1,0 +1,8 @@
+---
+- name: Install guest prerequisites
+  hosts: nebula_test
+  gather_facts: false
+  tasks:
+    - ansible.builtin.apt:
+        update_cache: true
+        name: [cron, iputils-ping]

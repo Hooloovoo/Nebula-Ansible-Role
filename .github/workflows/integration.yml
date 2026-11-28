@@ -1,0 +1,33 @@
+name: Nebula integration
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up LXD
+        run: |
+          sudo snap install lxd --channel=5.21/stable
+          sudo lxd waitready
+          sudo lxd init --auto
+          sudo usermod -aG lxd "$USER"
+          sudo lxc project create local:nebula-ansible-testing -c features.profiles=false
+          # Allow guest egress and replies when Docker blocks forwarding.
+          # See LXD's firewall guide: https://documentation.ubuntu.com/lxd/latest/howto/network_bridge_firewalld/#prevent-connectivity-issues-with-lxd-and-docker
+          if sudo iptables -nL DOCKER-USER; then
+            sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+            sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          fi
+      - name: Run the smoke test
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install -r molecule/requirements.txt
+          sg lxd -c 'molecule test'

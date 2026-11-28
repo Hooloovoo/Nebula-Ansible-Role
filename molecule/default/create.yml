@@ -1,0 +1,18 @@
+---
+- name: Launch the smoke test guests
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - ansible.builtin.assert:
+        that: ansible_lxd_project not in ['', 'default']
+        fail_msg: Use a dedicated LXD project for the smoke test.
+
+    - ansible.builtin.command:
+        argv: [lxc, launch, 'ubuntu:26.04', '{{ ansible_lxd_remote }}:{{ hostvars[item].ansible_host }}', --project, '{{ ansible_lxd_project }}']
+        # Give Nebula access to the kernel's TUN device inside each container.
+        stdin: |
+          devices:
+            tun:
+              type: unix-char
+              path: /dev/net/tun
+      loop: '{{ groups.nebula_test }}'

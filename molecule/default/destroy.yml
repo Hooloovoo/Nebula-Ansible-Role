@@ -1,0 +1,17 @@
+---
+- name: Remove the smoke test guests from the dedicated project
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - ansible.builtin.assert:
+        that: ansible_lxd_project not in ['', 'default']
+        fail_msg: Use a dedicated LXD project for the smoke test.
+
+    - ansible.builtin.command:
+        argv: [lxc, list, '{{ ansible_lxd_remote }}:', --project, '{{ ansible_lxd_project }}', --format, csv, -c, n]
+      register: guests
+      changed_when: false
+
+    - ansible.builtin.command:
+        argv: [lxc, delete, '{{ ansible_lxd_remote }}:{{ item }}', --project, '{{ ansible_lxd_project }}', --force]
+      loop: '{{ groups.nebula_test | map("extract", hostvars, "ansible_host") | intersect(guests.stdout_lines) }}'

@@ -1,2 +1,3 @@
 # ssh keys
 ansible_*
+.venv/
