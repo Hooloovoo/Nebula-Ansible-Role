@@ -1,0 +1,9 @@
+---
+- name: Deploy the checked-out role
+  hosts: nebula_test
+  vars:
+    # Bootstrap through the lighthouse's LXD bridge address.
+    nebula_lighthouse_public_hostname: '{{ hostvars.lighthouse.ansible_facts.default_ipv4.address }}'
+  tasks:
+    - ansible.builtin.include_role:
+        name: '{{ lookup("ansible.builtin.env", "MOLECULE_PROJECT_DIRECTORY") }}'

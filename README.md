@@ -156,3 +156,7 @@ The role automatically generates an ED25519 SSH host key at `{{ nebula_config_di
 ```
 ansible-playbook -i inventory nebula.yml
 ```
+
+## Integration testing
+
+See the [Molecule smoke test guide](molecule/README.md) to test overlay connectivity.

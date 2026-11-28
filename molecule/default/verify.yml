@@ -1,0 +1,18 @@
+---
+- name: Verify node-to-node Nebula connectivity
+  hosts: node1
+  gather_facts: false
+  tasks:
+    - ansible.builtin.slurp:
+        src: /opt/nebula/config.yml
+      register: nebula_config
+
+    - name: Ping node2 through the configured tunnel
+      ansible.builtin.command:
+        argv: [ping, -I, '{{ (nebula_config.content | b64decode | from_yaml).tun.dev }}', -n, -c, '1', -W, '2', '{{ hostvars.node2.nebula_internal_ip_addr }}']
+      register: ping_result
+      until: ping_result.rc == 0
+      # Allow the nodes to register again after the role restarts the lighthouse.
+      retries: 30
+      delay: 2
+      changed_when: false

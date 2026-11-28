@@ -1,0 +1,37 @@
+---
+prerun: false
+dependency:
+  name: galaxy
+  options:
+    role-file: molecule/requirements.yml
+    requirements-file: molecule/requirements.yml
+driver:
+  name: default
+platforms:
+  - name: lighthouse
+    groups: [nebula_test, nebula_lighthouse]
+  - name: node1
+    groups: [nebula_test]
+  - name: node2
+    groups: [nebula_test]
+provisioner:
+  inventory:
+    group_vars:
+      all:
+        ansible_lxd_remote: "${NEBULA_TEST_REMOTE:-local}"
+        ansible_lxd_project: "${NEBULA_TEST_PROJECT:-nebula-ansible-testing}"
+      nebula_test:
+        ansible_connection: community.general.lxd
+        ansible_python_interpreter: /usr/bin/python3
+        nebula_lighthouse_internal_ip_addr: 10.43.0.1
+    host_vars:
+      lighthouse:
+        ansible_host: nebula-smoke-lighthouse
+      node1:
+        ansible_host: nebula-smoke-node1
+        nebula_internal_ip_addr: 10.43.0.2
+      node2:
+        ansible_host: nebula-smoke-node2
+        nebula_internal_ip_addr: 10.43.0.3
+scenario:
+  test_sequence: [dependency, destroy, create, prepare, converge, verify, destroy]
